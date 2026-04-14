@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FVMA Disaster Response Command Center</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f4f8;min-height:100vh;}
+  .sidebar{width:230px;background:#1a3a5c;position:fixed;top:0;left:0;height:100vh;overflow-y:auto;z-index:100;}
+  .logo-area{padding:22px 18px 18px;border-bottom:1px solid rgba(255,255,255,0.1);}
+  .logo-badge{background:#fff;color:#1a3a5c;font-weight:700;font-size:13px;padding:4px 10px;border-radius:6px;display:inline-block;margin-bottom:8px;letter-spacing:0.05em;}
+  .logo-title{color:#fff;font-size:15px;font-weight:600;line-height:1.3;}
+  .logo-sub{color:rgba(255,255,255,0.5);font-size:11px;margin-top:3px;}
+  .nav-section{padding:16px 18px 4px;color:rgba(255,255,255,0.35);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:11px 18px;color:rgba(255,255,255,0.65);font-size:13px;cursor:pointer;border-left:3px solid transparent;transition:all 0.15s;}
+  .nav-item:hover{background:rgba(255,255,255,0.07);color:#fff;}
+  .nav-item.active{background:rgba(255,255,255,0.12);color:#fff;border-left-color:#4fb8ff;}
+  .nav-icon{width:15px;height:15px;flex-shrink:0;opacity:0.75;}
+  .main{margin-left:230px;min-height:100vh;}
+  .topbar{background:#fff;border-bottom:1px solid #e2e8f0;padding:0 28px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;}
+  .topbar-left{display:flex;align-items:center;gap:14px;}
+  .topbar-title{font-size:14px;font-weight:600;color:#1a202c;}
+  .event-pill{background:#fff8e1;color:#e65100;font-size:12px;padding:4px 12px;border-radius:20px;border:1px solid #ffcc02;display:flex;align-items:center;gap:6px;font-weight:500;}
+  .pulse{width:7px;height:7px;background:#f44336;border-radius:50%;animation:pulse 1.5s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.25}}
+  .topbar-right{display:flex;align-items:center;gap:12px;}
+  .state-select{padding:5px 10px;border:1px solid #e2e8f0;border-radius:20px;font-size:12px;color:#1a202c;background:#fff;cursor:pointer;}
+  .avatar{width:34px;height:34px;background:#1a3a5c;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:600;}
+  .content{padding:28px;}
+  .page{display:none;}
+  .page.active{display:block;}
+  .page-title{font-size:22px;font-weight:700;color:#1a202c;margin-bottom:4px;}
+  .page-sub{font-size:13px;color:#718096;margin-bottom:24px;}
+  .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:26px;}
+  .stat-card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;}
+  .stat-label{font-size:12px;color:#718096;margin-bottom:8px;font-weight:500;}
+  .stat-val{font-size:32px;font-weight:700;color:#1a202c;}
+  .stat-val.green{color:#276749;}
+  .stat-val.red{color:#c53030;}
+  .stat-val.amber{color:#c05621;}
+  .stat-trend{font-size:11px;color:#718096;margin-top:4px;}
+  .card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:22px;margin-bottom:18px;}
+  .card-title{font-size:14px;font-weight:600;color:#1a202c;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;}
+  .two-col{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+  .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:18px;}
+  .channel-card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;text-align:center;}
+  .channel-icon{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;}
+  .channel-name{font-size:14px;font-weight:600;color:#1a202c;margin-bottom:3px;}
+  .channel-stat{font-size:12px;color:#718096;}
+  .progress-wrap{margin-bottom:14px;}
+  .progress-label{display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px;}
+  .progress-label span:first-child{color:#718096;}
+  .progress-label span:last-child{font-weight:600;color:#1a202c;}
+  .progress-bar{background:#f0f4f8;border-radius:4px;height:8px;overflow:hidden;}
+  .progress-fill{height:100%;border-radius:4px;}
+  .need-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #f0f4f8;font-size:13px;}
+  .need-row:last-child{border-bottom:none;}
+  .need-badge{padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;}
+  .badge-red{background:#fff5f5;color:#c53030;}
+  .badge-orange{background:#fffaf0;color:#c05621;}
+  .badge-purple{background:#faf5ff;color:#553c9a;}
+  .tbl{width:100%;border-collapse:collapse;font-size:13px;}
+  .tbl th{text-align:left;padding:10px 14px;color:#718096;font-weight:600;border-bottom:1px solid #e2e8f0;font-size:12px;background:#f8fafc;}
+  .tbl td{padding:12px 14px;border-bottom:1px solid #f0f4f8;color:#2d3748;vertical-align:middle;}
+  .tbl tr:last-child td{border-bottom:none;}
+  .tbl tr.expandable{cursor:pointer;}
+  .tbl tr.expandable:hover td{background:#f8fafc;}
+  .status{padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;display:inline-block;}
+  .status-ok{background:#f0fff4;color:#276749;}
+  .status-help{background:#fff5f5;color:#c53030;}
+  .status-pending{background:#fffaf0;color:#c05621;}
+  .status-none{background:#faf5ff;color:#553c9a;}
+  .detail-row{background:#f8fafc;}
+  .detail-row td{padding:14px 18px;}
+  .detail-box{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:8px;font-size:12px;color:#4a5568;line-height:1.6;}
+  .detail-box:last-child{margin-bottom:0;}
+  .detail-box strong{color:#1a202c;font-weight:600;}
+  .filter-row{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+  .filter-chip{padding:6px 14px;border-radius:20px;border:1px solid #e2e8f0;font-size:12px;cursor:pointer;background:#fff;color:#718096;font-weight:500;transition:all 0.15s;}
+  .filter-chip.active{background:#1a3a5c;color:#fff;border-color:#1a3a5c;}
+  .filter-chip:hover:not(.active){background:#f0f4f8;}
+  .export-row{display:flex;gap:8px;}
+  .btn{padding:8px 18px;border-radius:8px;border:1px solid #e2e8f0;background:#fff;color:#2d3748;font-size:13px;cursor:pointer;font-weight:500;transition:all 0.15s;}
+  .btn:hover{background:#f0f4f8;}
+  .btn-primary{background:#1a3a5c;color:#fff;border-color:#1a3a5c;}
+  .btn-primary:hover{background:#1e4976;}
+  .upload-zone{border:2px dashed #cbd5e0;border-radius:12px;padding:44px;text-align:center;background:#f8fafc;margin-bottom:18px;}
+  .upload-icon{width:48px;height:48px;background:#e2e8f0;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;}
+  .upload-title{font-size:15px;font-weight:600;color:#2d3748;margin-bottom:4px;}
+  .upload-sub{font-size:13px;color:#718096;margin-bottom:16px;}
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;}
+  .form-group{display:flex;flex-direction:column;gap:5px;}
+  .form-label{font-size:12px;font-weight:600;color:#4a5568;}
+  .form-input{padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;color:#2d3748;background:#fff;}
+  .form-input:focus{outline:none;border-color:#1a3a5c;box-shadow:0 0 0 3px rgba(26,58,92,0.1);}
+  .agent-hero{background:#1a3a5c;border-radius:12px;padding:28px;color:#fff;margin-bottom:18px;}
+  .agent-avatar{width:56px;height:56px;background:rgba(255,255,255,0.15);border-radius:50%;display:flex;align-items:center;justify-content:center;margin-bottom:14px;}
+  .agent-name{font-size:20px;font-weight:700;margin-bottom:6px;}
+  .agent-desc{color:rgba(255,255,255,0.7);font-size:13px;line-height:1.6;margin-bottom:20px;max-width:480px;}
+  .agent-btn{background:#fff;color:#1a3a5c;padding:10px 22px;border-radius:8px;display:inline-block;font-size:13px;font-weight:700;cursor:pointer;border:none;}
+  .q-list{list-style:none;}
+  .q-item{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #f0f4f8;font-size:13px;color:#2d3748;line-height:1.5;}
+  .q-item:last-child{border-bottom:none;}
+  .q-num{width:24px;height:24px;background:#1a3a5c;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;margin-top:1px;}
+  .state-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #f0f4f8;font-size:13px;}
+  .state-row:last-child{border-bottom:none;}
+  .state-active{color:#276749;font-size:12px;font-weight:500;}
+  .state-inactive{color:#a0aec0;font-size:12px;}
+  .toast{position:fixed;bottom:24px;right:24px;background:#1a3a5c;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;font-weight:500;z-index:999;transform:translateY(80px);opacity:0;transition:all 0.3s;}
+  .toast.show{transform:translateY(0);opacity:1;}
+  .member-count{font-size:12px;color:#718096;font-weight:400;}
+  .report-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:gap;}
+  @media(max-width:768px){
+    .sidebar{transform:translateX(-230px);}
+    .main{margin-left:0;}
+    .stat-grid{grid-template-columns:1fr 1fr;}
+    .two-col,.three-col,.form-grid{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="logo-area">
+    <div class="logo-badge">FVMA</div>
+    <div class="logo-title">Disaster Response<br>Command Center</div>
+    <div class="logo-sub">Florida Veterinary Medical Assoc.</div>
+  </div>
+  <div class="nav-section">Operations</div>
+  <div class="nav-item active" onclick="showPage('dashboard',this)">
+    <svg class="nav-icon" viewBox="0 0 16 16" fill="white"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+    Dashboard
+  </div>
+  <div class="nav-item" onclick="showPage('outreach',this)">
+    <svg class="nav-icon" viewBox="0 0 16 16" fill="white"><path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v.5L8 7.5 2 3.5V3zm0 1.5v7a1 1 0 001 1h10a1 1 0 001-1v-7L8 9 2 4.5z"/></svg>
+    Outreach
+  </div>
+  <div class="nav-item" onclick="showPage('agent',this)">
+    <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="white" stroke-width="1.3"><circle cx="8" cy="8" r="6"/><path d="M5.5 7.5a2.5 2.5 0 005 0"/><circle cx="6" cy="6.5" r="0.8" fill="white"/><circle cx="10" cy="6.5" r="0.8" fill="white"/></svg>
+    Voice Agent
+  </div>
+  <div class="nav-item" onclick="showPage('report',this)">
+    <svg class="nav-icon" viewBox="0 0 16 16" fill="white"><path d="M3 2h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zm1 3v1h8V5H4zm0 3v1h8V8H4zm0 3v1h5v-1H4z"/></svg>
+    Reports
+  </div>
+  <div class="nav-section">Setup</div>
+  <div class="nav-item" onclick="showPage('members',this)">
+    <svg class="nav-icon" viewBox="0 0 16 16" fill="white"><path d="M8 8a3 3 0 100-6 3 3 0 000 6zm-5 6a5 5 0 0110 0H3z"/></svg>
+    Members
+  </div>
+  <div class="nav-item" onclick="showPage('settings',this)">
+    <svg class="nav-icon" viewBox="0 0 16 16" fill="white"><circle cx="8" cy="8" r="2.5"/><path fill-rule="evenodd" d="M8 1a1 1 0 00-1 1v.5a5.5 5.5 0 00-2.6 1.5l-.43-.25a1 1 0 00-1.37.37l-1 1.73a1 1 0 00.37 1.37l.43.25A5.5 5.5 0 002 8.5v.5a5.5 5.5 0 00.4 2l-.43.25a1 1 0 00-.37 1.37l1 1.73a1 1 0 001.37.37l.43-.25A5.5 5.5 0 007 15.5v.5a1 1 0 002 0v-.5a5.5 5.5 0 002.6-1.5l.43.25a1 1 0 001.37-.37l1-1.73a1 1 0 00-.37-1.37l-.43-.25A5.5 5.5 0 0014 9v-.5a5.5 5.5 0 00-.4-2l.43-.25a1 1 0 00.37-1.37l-1-1.73a1 1 0 00-1.37-.37l-.43.25A5.5 5.5 0 009 2.5V2a1 1 0 00-1-1z" clip-rule="evenodd" opacity="0.5"/></svg>
+    Settings
+  </div>
+</div>
+
+<div class="main">
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="topbar-title">Hurricane Milton Response</span>
+      <div class="event-pill"><div class="pulse"></div> Active Event</div>
+    </div>
+    <div class="topbar-right">
+      <select class="state-select">
+        <option>&#9679; Florida</option>
+        <option>Georgia</option>
+        <option>Texas</option>
+        <option>+ Add State</option>
+      </select>
+      <div class="avatar">DJ</div>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- DASHBOARD -->
+    <div id="page-dashboard" class="page active">
+      <div class="page-title">Response Dashboard</div>
+      <div class="page-sub">Hurricane Milton &nbsp;&middot;&nbsp; Initiated Oct 9, 2024 &nbsp;&middot;&nbsp; 847 members contacted so far</div>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total Members</div>
+          <div class="stat-val">1,204</div>
+          <div class="stat-trend">Florida chapter</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Confirmed Safe</div>
+          <div class="stat-val green">631</div>
+          <div class="stat-trend">52% of total</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Need Assistance</div>
+          <div class="stat-val red">89</div>
+          <div class="stat-trend">7% of total</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">No Response Yet</div>
+          <div class="stat-val amber">484</div>
+          <div class="stat-trend">Retry scheduled in 24hrs</div>
+        </div>
+      </div>
+      <div class="two-col">
+        <div class="card">
+          <div class="card-title">Response by channel</div>
+          <div class="progress-wrap">
+            <div class="progress-label"><span>Voice agent (click link)</span><span>412 responses</span></div>
+            <div class="progress-bar"><div class="progress-fill" style="width:68%;background:#1a3a5c;"></div></div>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-label"><span>Email link</span><span>285 responses</span></div>
+            <div class="progress-bar"><div class="progress-fill" style="width:47%;background:#2196f3;"></div></div>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-label"><span>SMS link</span><span>150 responses</span></div>
+            <div class="progress-bar"><div class="progress-fill" style="width:25%;background:#38a169;"></div></div>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-label"><span>Auto-dial call</span><span>No response</span></div>
+            <div class="progress-bar"><div class="progress-fill" style="width:0%;background:#e53e3e;"></div></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Top assistance needs</div>
+          <div class="need-row"><span>Power outage</span><span class="need-badge badge-red">54 practices</span></div>
+          <div class="need-row"><span>Facility damage</span><span class="need-badge badge-red">31 practices</span></div>
+          <div class="need-row"><span>Water / flooding</span><span class="need-badge badge-orange">22 practices</span></div>
+          <div class="need-row"><span>Supply shortage</span><span class="need-badge badge-orange">18 practices</span></div>
+          <div class="need-row"><span>Vet injury / missing</span><span class="need-badge badge-purple">9 practices</span></div>
+          <div class="need-row"><span>Evacuation</span><span class="need-badge badge-purple">7 practices</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Counties with highest need</div>
+        <table class="tbl">
+          <thead><tr><th>County</th><th>Total Members</th><th>Safe</th><th>Need Help</th><th>No Response</th></tr></thead>
+          <tbody>
+            <tr><td>Hillsborough</td><td>187</td><td>112</td><td>24</td><td>51</td></tr>
+            <tr><td>Pinellas</td><td>143</td><td>79</td><td>21</td><td>43</td></tr>
+            <tr><td>Sarasota</td><td>98</td><td>51</td><td>18</td><td>29</td></tr>
+            <tr><td>Lee</td><td>112</td><td>44</td><td>15</td><td>53</td></tr>
+            <tr><td>Charlotte</td><td>67</td><td>31</td><td>11</td><td>25</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- OUTREACH -->
+    <div id="page-outreach" class="page">
+      <div class="page-title">Outreach Campaign</div>
+      <div class="page-sub">Configure and launch multi-channel outreach to all members</div>
+      <div class="three-col">
+        <div class="channel-card">
+          <div class="channel-icon" style="background:#e6f0fb;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a3a5c" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8 19.79 19.79 0 01.22 1.18 2 2 0 012.2 0h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 14.92z"/></svg>
+          </div>
+          <div class="channel-name">Voice Call</div>
+          <div class="channel-stat" style="color:#276749;font-weight:500;">Auto-dials every member</div>
+        </div>
+        <div class="channel-card">
+          <div class="channel-icon" style="background:#e6f0fb;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a3a5c" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          </div>
+          <div class="channel-name">Email</div>
+          <div class="channel-stat">Includes unique voice agent link</div>
+        </div>
+        <div class="channel-card">
+          <div class="channel-icon" style="background:#e6f0fb;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a3a5c" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          </div>
+          <div class="channel-name">SMS Text</div>
+          <div class="channel-stat">Short link to voice agent</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Launch new outreach campaign</div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Event / Disaster name</label>
+            <input class="form-input" type="text" value="Hurricane Milton Response" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Send to</label>
+            <select class="form-input"><option>All members (1,204)</option><option>No response only (484)</option><option>Specific county</option><option>Custom list</option></select>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Channels to use</label>
+            <select class="form-input"><option>Email + SMS + Voice call (all three)</option><option>Email + SMS only</option><option>Email only</option><option>Voice call only</option></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Auto-retry non-responders</label>
+            <select class="form-input"><option>Yes — retry after 24 hours</option><option>Yes — retry after 48 hours</option><option>No automatic retry</option></select>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:6px;">
+          <button class="btn btn-primary" onclick="toast('Outreach launched to 1,204 members via all channels!')">Launch outreach</button>
+          <button class="btn" onclick="toast('Preview email opened in new tab')">Preview message</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Current campaign status</div>
+        <table class="tbl">
+          <thead><tr><th>Channel</th><th>Sent</th><th>Delivered</th><th>Responded</th><th>Failed</th></tr></thead>
+          <tbody>
+            <tr><td>Email</td><td>1,204</td><td>1,189</td><td>285</td><td>15</td></tr>
+            <tr><td>SMS</td><td>1,198</td><td>1,182</td><td>150</td><td>16</td></tr>
+            <tr><td>Voice call</td><td>847</td><td>831</td><td>412</td><td>16</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- VOICE AGENT -->
+    <div id="page-agent" class="page">
+      <div class="page-title">Voice Agent</div>
+      <div class="page-sub">Members click their unique link to speak with the AI response agent</div>
+      <div class="agent-hero">
+        <div class="agent-avatar">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+        </div>
+        <div class="agent-name">FVMA Disaster Response Agent</div>
+        <div class="agent-desc">A conversational AI that speaks with each member in a natural, caring call. It already knows their name and practice. All responses are logged automatically — no forms, no typing, just talking.</div>
+        <button class="agent-btn" onclick="toast('In the live system, this opens a voice call in the browser')">&#9654; Preview agent experience</button>
+      </div>
+      <div class="card">
+        <div class="card-title">Questions the agent asks every member</div>
+        <ul class="q-list">
+          <li class="q-item"><div class="q-num">1</div><div>Are you personally safe and unharmed right now?</div></li>
+          <li class="q-item"><div class="q-num">2</div><div>Can you confirm the current address and best phone number for your practice?</div></li>
+          <li class="q-item"><div class="q-num">3</div><div>How many veterinarians do you currently employ at your practice?</div></li>
+          <li class="q-item"><div class="q-num">4</div><div>Are all of your veterinarians safe and accounted for right now?</div></li>
+          <li class="q-item"><div class="q-num">5</div><div>Is your practice currently operational and open to patients?</div></li>
+          <li class="q-item"><div class="q-num">6</div><div>If not — what is the main reason? Power outage, flooding, facility damage, evacuation, or something else?</div></li>
+          <li class="q-item"><div class="q-num">7</div><div>What is the best way for the FVMA to reach you right now?</div></li>
+          <li class="q-item"><div class="q-num">8</div><div>Is there anything specific the FVMA can do to help you or your practice right now?</div></li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-title">Sample member experience</div>
+        <div style="background:#f8fafc;border-radius:10px;padding:18px;font-size:13px;line-height:1.8;color:#2d3748;">
+          <div style="margin-bottom:10px;"><strong style="color:#1a3a5c;">Agent:</strong> &ldquo;Hi Dr. Williams, this is Jordan calling from the Florida Veterinary Medical Association. We just want to make sure you and your team are doing okay after the hurricane. Do you have a couple of minutes?&rdquo;</div>
+          <div style="margin-bottom:10px;"><strong style="color:#276749;">Dr. Williams:</strong> &ldquo;Yes, I'm safe, thanks for calling.&rdquo;</div>
+          <div style="margin-bottom:10px;"><strong style="color:#1a3a5c;">Agent:</strong> &ldquo;So glad to hear that. Is your practice at 892 Gulf Blvd still your current location, and is that phone number still good?&rdquo;</div>
+          <div style="margin-bottom:10px;"><strong style="color:#276749;">Dr. Williams:</strong> &ldquo;Yes, same address. But we're closed — we lost power and had about two feet of flooding.&rdquo;</div>
+          <div style="margin-bottom:10px;"><strong style="color:#1a3a5c;">Agent:</strong> &ldquo;I'm so sorry to hear that. Is there anything the FVMA can do to help you right now?&rdquo;</div>
+          <div><strong style="color:#276749;">Dr. Williams:</strong> &ldquo;If you could help us find a generator rental that would be amazing. We have some ICU animals that need power.&rdquo;</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- REPORTS -->
+    <div id="page-report" class="page">
+      <div class="page-title">Response Reports</div>
+      <div class="page-sub">Full log of all member responses &nbsp;&middot;&nbsp; Hurricane Milton</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
+        <div class="filter-row" style="margin:0;">
+          <div class="filter-chip active" onclick="setFilter(this,'all')">All (847)</div>
+          <div class="filter-chip" onclick="setFilter(this,'safe')">Safe (631)</div>
+          <div class="filter-chip" onclick="setFilter(this,'help')">Needs help (89)</div>
+          <div class="filter-chip" onclick="setFilter(this,'pending')">Pending (43)</div>
+          <div class="filter-chip" onclick="setFilter(this,'none')">No contact (484)</div>
+        </div>
+        <div class="export-row">
+          <button class="btn" onclick="toast('Report exported as CSV')">Export CSV</button>
+          <button class="btn btn-primary" onclick="toast('PDF report generated and downloading')">Export PDF Report</button>
+        </div>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden;">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Member / Practice</th>
+              <th>County</th>
+              <th>Status</th>
+              <th>Vets</th>
+              <th>Channel</th>
+              <th>Help needed</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="report-tbody">
+            <tr class="expandable" onclick="toggleRow('r1','a1')">
+              <td><strong>Dr. Sarah Chen</strong><br><span style="font-size:11px;color:#718096;">Sunshine Animal Clinic</span></td>
+              <td>Hillsborough</td>
+              <td><span class="status status-ok">Safe</span></td>
+              <td>4</td>
+              <td>Voice agent</td>
+              <td>None</td>
+              <td style="color:#a0aec0;font-size:11px;">&#9660; expand</td>
+            </tr>
+            <tr id="a1" class="detail-row" style="display:none;">
+              <td colspan="7">
+                <div class="detail-box"><strong>Address &amp; phone:</strong> 1425 Dale Mabry Hwy, Tampa FL 33629 &nbsp;&middot;&nbsp; (813) 555-0142</div>
+                <div class="detail-box"><strong>All 4 vets safe:</strong> Yes, all accounted for &nbsp;&middot;&nbsp; <strong>Practice operational:</strong> Yes, open limited hours</div>
+                <div class="detail-box"><strong>Best contact:</strong> Cell (813) 555-0142 &nbsp;&middot;&nbsp; <strong>FVMA help requested:</strong> None at this time, thank you for checking in</div>
+              </td>
+            </tr>
+            <tr class="expandable" onclick="toggleRow('r2','a2')">
+              <td><strong>Dr. Marcus Williams</strong><br><span style="font-size:11px;color:#718096;">Gulf Coast Pet Hospital</span></td>
+              <td>Pinellas</td>
+              <td><span class="status status-help">Needs help</span></td>
+              <td>7</td>
+              <td>Email</td>
+              <td>Power, flooding</td>
+              <td style="color:#a0aec0;font-size:11px;">&#9660; expand</td>
+            </tr>
+            <tr id="a2" class="detail-row" style="display:none;">
+              <td colspan="7">
+                <div class="detail-box"><strong>Address &amp; phone:</strong> 892 Gulf Blvd, St. Pete Beach FL 33706 &nbsp;&middot;&nbsp; (727) 555-0298</div>
+                <div class="detail-box"><strong>Vets accounted for:</strong> 6 of 7 — 1 vet evacuated to Georgia &nbsp;&middot;&nbsp; <strong>Practice operational:</strong> No — power outage + 2ft flooding</div>
+                <div class="detail-box"><strong>Best contact:</strong> Cell (727) 555-0312 &nbsp;&middot;&nbsp; <strong>FVMA help requested:</strong> Generator rental assistance and help transferring ICU animals to another facility</div>
+              </td>
+            </tr>
+            <tr class="expandable" onclick="toggleRow('r3','a3')">
+              <td><strong>Dr. James Okafor</strong><br><span style="font-size:11px;color:#718096;">Panhandle Animal Clinic</span></td>
+              <td>Escambia</td>
+              <td><span class="status status-ok">Safe</span></td>
+              <td>2</td>
+              <td>Voice agent</td>
+              <td>None</td>
+              <td style="color:#a0aec0;font-size:11px;">&#9660; expand</td>
+            </tr>
+            <tr id="a3" class="detail-row" style="display:none;">
+              <td colspan="7">
+                <div class="detail-box"><strong>Address &amp; phone:</strong> 3201 N Pace Blvd, Pensacola FL 32505 &nbsp;&middot;&nbsp; (850) 555-0177</div>
+                <div class="detail-box"><strong>All 2 vets safe:</strong> Yes &nbsp;&middot;&nbsp; <strong>Practice operational:</strong> Yes, fully open</div>
+                <div class="detail-box"><strong>Best contact:</strong> Office (850) 555-0177 &nbsp;&middot;&nbsp; <strong>FVMA help requested:</strong> We're fine — happy to help take in animals from affected areas if needed</div>
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Dr. Patricia Morales</strong><br><span style="font-size:11px;color:#718096;">Everglades Vet Associates</span></td>
+              <td>Miami-Dade</td>
+              <td><span class="status status-pending">Pending</span></td>
+              <td>—</td>
+              <td>SMS + Email</td>
+              <td>Unknown</td>
+              <td style="color:#a0aec0;font-size:11px;"></td>
+            </tr>
+            <tr>
+              <td><strong>Dr. Lisa Thornton</strong><br><span style="font-size:11px;color:#718096;">Orlando Pet Wellness</span></td>
+              <td>Orange</td>
+              <td><span class="status status-none">No contact</span></td>
+              <td>—</td>
+              <td>—</td>
+              <td>Unknown</td>
+              <td style="color:#a0aec0;font-size:11px;"></td>
+            </tr>
+            <tr class="expandable" onclick="toggleRow('r6','a6')">
+              <td><strong>Dr. Robert Kim</strong><br><span style="font-size:11px;color:#718096;">Bay Area Animal Hospital</span></td>
+              <td>Hillsborough</td>
+              <td><span class="status status-help">Needs help</span></td>
+              <td>5</td>
+              <td>Voice agent</td>
+              <td>Facility damage</td>
+              <td style="color:#a0aec0;font-size:11px;">&#9660; expand</td>
+            </tr>
+            <tr id="a6" class="detail-row" style="display:none;">
+              <td colspan="7">
+                <div class="detail-box"><strong>Address &amp; phone:</strong> 4802 Gandy Blvd, Tampa FL 33611 &nbsp;&middot;&nbsp; (813) 555-0233</div>
+                <div class="detail-box"><strong>All 5 vets safe:</strong> Yes, all accounted for &nbsp;&middot;&nbsp; <strong>Practice operational:</strong> No — roof damage, facility unsafe to enter</div>
+                <div class="detail-box"><strong>Best contact:</strong> Cell (813) 555-0244 &nbsp;&middot;&nbsp; <strong>FVMA help requested:</strong> Need referral to emergency contractors and temp space to see patients</div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- MEMBERS -->
+    <div id="page-members" class="page">
+      <div class="page-title">Member Roster</div>
+      <div class="page-sub">Upload and manage your member list &nbsp;&middot;&nbsp; <span class="member-count">1,204 members loaded &nbsp;&middot;&nbsp; Last updated Oct 8, 2024</span></div>
+      <div class="card">
+        <div class="card-title">Upload member list</div>
+        <div class="upload-zone">
+          <div class="upload-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#718096" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          </div>
+          <div class="upload-title">Drop your Excel or CSV file here</div>
+          <div class="upload-sub">Supports .xlsx and .csv files &nbsp;&middot;&nbsp; Required columns: name, email, phone, practice name, county</div>
+          <button class="btn btn-primary" onclick="toast('In the live system, this opens a file picker to choose your Excel or CSV file')">Choose file to upload</button>
+        </div>
+        <div style="font-size:12px;color:#718096;margin-bottom:8px;">Current roster: 1,204 members across 67 Florida counties</div>
+        <div class="progress-bar" style="height:6px;"><div class="progress-fill" style="width:100%;background:#1a3a5c;"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Member list preview <span style="font-size:12px;font-weight:400;color:#718096;">Showing 5 of 1,204</span></div>
+        <table class="tbl">
+          <thead><tr><th>Name</th><th>Practice</th><th>County</th><th>Email</th><th>Phone</th><th>Vets</th></tr></thead>
+          <tbody>
+            <tr><td>Dr. Sarah Chen</td><td>Sunshine Animal Clinic</td><td>Hillsborough</td><td>s.chen@sunshineac.com</td><td>(813) 555-0142</td><td>4</td></tr>
+            <tr><td>Dr. Marcus Williams</td><td>Gulf Coast Pet Hospital</td><td>Pinellas</td><td>m.williams@gcph.com</td><td>(727) 555-0298</td><td>7</td></tr>
+            <tr><td>Dr. James Okafor</td><td>Panhandle Animal Clinic</td><td>Escambia</td><td>j.okafor@panhandlevet.com</td><td>(850) 555-0177</td><td>2</td></tr>
+            <tr><td>Dr. Patricia Morales</td><td>Everglades Vet Associates</td><td>Miami-Dade</td><td>p.morales@evassoc.com</td><td>(305) 555-0091</td><td>3</td></tr>
+            <tr><td>Dr. Robert Kim</td><td>Bay Area Animal Hospital</td><td>Hillsborough</td><td>r.kim@baah.com</td><td>(813) 555-0233</td><td>5</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div id="page-settings" class="page">
+      <div class="page-title">Settings</div>
+      <div class="page-sub">Configure branding, organization details, and state chapters</div>
+      <div class="card">
+        <div class="card-title">Organization details</div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Organization full name</label>
+            <input class="form-input" value="Florida Veterinary Medical Association" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Abbreviation</label>
+            <input class="form-input" value="FVMA" />
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Primary brand color</label>
+            <input class="form-input" value="#1A3A5C" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Disaster response email</label>
+            <input class="form-input" value="disaster@fvma.net" />
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Outreach phone number (Twilio)</label>
+            <input class="form-input" value="+1 (813) 555-0100" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Executive director name</label>
+            <input class="form-input" value="Duffy Jones" />
+          </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:6px;" onclick="toast('Settings saved successfully')">Save settings</button>
+      </div>
+      <div class="card">
+        <div class="card-title">State chapters &nbsp;<span style="font-size:12px;font-weight:400;color:#718096;">— Scale to any state</span></div>
+        <div class="state-row">
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1a202c;">Florida (FVMA)</div>
+            <div style="font-size:12px;color:#718096;">1,204 members &nbsp;&middot;&nbsp; Active since 2024</div>
+          </div>
+          <span class="state-active">&#9679; Active</span>
+        </div>
+        <div class="state-row">
+          <div>
+            <div style="font-weight:500;font-size:13px;color:#a0aec0;">Georgia (GVMA)</div>
+            <div style="font-size:12px;color:#a0aec0;">Not yet configured</div>
+          </div>
+          <button class="btn" style="font-size:12px;padding:5px 12px;" onclick="toast('Georgia chapter setup wizard would open here')">Set up</button>
+        </div>
+        <div class="state-row">
+          <div>
+            <div style="font-weight:500;font-size:13px;color:#a0aec0;">Texas (TVMA)</div>
+            <div style="font-size:12px;color:#a0aec0;">Not yet configured</div>
+          </div>
+          <button class="btn" style="font-size:12px;padding:5px 12px;" onclick="toast('Texas chapter setup wizard would open here')">Set up</button>
+        </div>
+        <button class="btn" style="margin-top:14px;" onclick="toast('Add new state chapter wizard would open here')">+ Add another state</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function showPage(id, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  if (el) el.classList.add('active');
+}
+function toggleRow(rowId, answerId) {
+  var a = document.getElementById(answerId);
+  if (a) a.style.display = a.style.display === 'none' ? 'table-row' : 'none';
+}
+function setFilter(el, type) {
+  document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+}
+function toast(msg) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(function(){ t.classList.remove('show'); }, 3000);
+}
+</script>
+</body>
+</html>
