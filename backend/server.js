@@ -429,6 +429,8 @@ app.post("/api/events/:id/outreach-launch", async (req, res) => {
   const outreachRows = [];
   const skipped = [];
   const pendingEmailSends = [];
+  let emailChannelRowCount = 0;
+  let smsChannelRowCount = 0;
 
   members.forEach((member) => {
     normalizedChannels.forEach((channel) => {
@@ -466,12 +468,15 @@ app.post("/api/events/:id/outreach-launch", async (req, res) => {
       });
 
       if (channel === "email") {
+        emailChannelRowCount += 1;
         pendingEmailSends.push({
           to: member.email,
           contact_name: member.full_name,
           token: outreachToken,
           outreach_link: outreachLink,
         });
+      } else if (channel === "sms") {
+        smsChannelRowCount += 1;
       }
     });
   });
@@ -508,6 +513,20 @@ app.post("/api/events/:id/outreach-launch", async (req, res) => {
     SENDGRID_FROM_EMAIL &&
     pendingEmailSends.length
   ) {
+    console.log(
+      "[outreach-launch] SendGrid sending block entered",
+      JSON.stringify({
+        eventId,
+        organizationId,
+        wantsEmail: normalizedChannels.includes("email"),
+        pendingEmailSends: pendingEmailSends.length,
+        emailChannelRowCount,
+        smsChannelRowCount,
+        SENDGRID_API_KEY_present: Boolean(SENDGRID_API_KEY),
+        SENDGRID_FROM_EMAIL_present: Boolean(SENDGRID_FROM_EMAIL),
+        OUTREACH_LINK_BASE_URL_present: Boolean(OUTREACH_LINK_BASE_URL),
+      }),
+    );
     emailSendAttempted = true;
     sendgridMail.setApiKey(SENDGRID_API_KEY);
 
@@ -541,16 +560,65 @@ app.post("/api/events/:id/outreach-launch", async (req, res) => {
       `,
     }));
 
+    console.log(
+      "[outreach-launch] SendGrid messages prepared",
+      JSON.stringify({ count: messages.length }),
+    );
+
     for (const msg of messages) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        await sendgridMail.send(msg);
+        console.log(
+          "[outreach-launch] SendGrid sending to",
+          JSON.stringify({ to: msg.to }),
+        );
+        const response = await sendgridMail.send(msg);
+        console.log(
+          "[outreach-launch] SendGrid send success",
+          JSON.stringify({
+            to: msg.to,
+            statusCode: response?.[0]?.statusCode,
+            messageId:
+              response?.[0]?.headers?.["x-message-id"] ||
+              response?.[0]?.headers?.["X-Message-Id"] ||
+              null,
+          }),
+        );
+        if (response?.[0]?.headers) {
+          const keys = Object.keys(response[0].headers || {});
+          console.log(
+            "[outreach-launch] SendGrid response header keys (first 10)",
+            JSON.stringify(keys.slice(0, 10)),
+          );
+        }
         emailSendSucceeded += 1;
       } catch (err) {
+        console.log(
+          "[outreach-launch] SendGrid send error",
+          JSON.stringify({
+            to: msg.to,
+            errorMessage: err?.message,
+            statusCode: err?.response?.statusCode,
+            body: err?.response?.body,
+          }),
+        );
         emailSendFailed += 1;
         emailSendErrors.push(err?.message || "SendGrid send failed.");
       }
     }
+  }
+  else {
+    console.log(
+      "[outreach-launch] Email sending not attempted",
+      JSON.stringify({
+        wantsEmail: normalizedChannels.includes("email"),
+        SENDGRID_API_KEY_present: Boolean(SENDGRID_API_KEY),
+        SENDGRID_FROM_EMAIL_present: Boolean(SENDGRID_FROM_EMAIL),
+        pendingEmailSends_length: pendingEmailSends.length,
+        emailChannelRowCount,
+        smsChannelRowCount,
+      }),
+    );
   }
 
   res.status(201).json({
@@ -807,6 +875,101 @@ app.post("/api/members/import-upsert", async (req, res) => {
     inserted: insertedCount,
     updated: updatedCount,
     skipped_count: skipped.length,
+  });
+});
+
+app.post("/api/members/existing-emails", async (req, res) => {
+  const organizationId =
+    toNullableText(req.body?.organization_id) || DEFAULT_ORGANIZATION_ID || null;
+  const emails = Array.isArray(req.body?.emails) ? req.body.emails : [];
+
+  if (!organizationId) {
+    res.status(400).json({ error: "organization_id is required (or set DEFAULT_ORGANIZATION_ID)." });
+    return;
+  }
+
+  const normalizedEmails = Array.from(
+    new Set(
+      emails
+        .map((value) => toNullableText(value))
+        .filter(Boolean)
+        .map((value) => value.trim().toLowerCase()),
+    ),
+  );
+
+  if (!normalizedEmails.length) {
+    res.json({ existing_emails: [] });
+    return;
+  }
+
+  const existing = new Set();
+  const chunkSize = 500;
+
+  for (let start = 0; start < normalizedEmails.length; start += chunkSize) {
+    const chunk = normalizedEmails.slice(start, start + chunkSize);
+    // eslint-disable-next-line no-await-in-loop
+    const { data, error } = await supabase
+      .from("members")
+      .select("email")
+      .eq("organization_id", organizationId)
+      .in("email", chunk);
+
+    if (error) {
+      res.status(500).json({ error: "Failed to check existing emails.", details: error.message });
+      return;
+    }
+
+    (data || []).forEach((row) => {
+      if (row.email) {
+        existing.add(String(row.email).trim().toLowerCase());
+      }
+    });
+  }
+
+  res.json({ existing_emails: Array.from(existing) });
+});
+
+app.get("/api/outreach/resolve", async (req, res) => {
+  const token = toNullableText(req.query.token);
+  if (!token) {
+    res.status(400).json({ error: "token query parameter is required." });
+    return;
+  }
+
+  const notesValue = `outreach_token:${token}`;
+  const { data: outreach, error } = await supabase
+    .from("outreach_contacts")
+    .select("id,contact_name,email,phone,channel,event_id,notes,created_at")
+    .eq("notes", notesValue)
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({
+      error: "Failed to resolve outreach token.",
+      details: error.message,
+    });
+    return;
+  }
+
+  if (!outreach) {
+    res.status(404).json({ error: "Invalid or expired token." });
+    return;
+  }
+
+  const { data: event } = await supabase
+    .from("events")
+    .select("id,name,status")
+    .eq("id", outreach.event_id)
+    .maybeSingle();
+
+  res.json({
+    token,
+    contact_name: outreach.contact_name,
+    email: outreach.email,
+    phone: outreach.phone,
+    channel: outreach.channel,
+    event: event ? { id: event.id, name: event.name, status: event.status } : null,
+    created_at: outreach.created_at,
   });
 });
 

@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
+import {
+  Link,
+  NavLink,
+  Route,
+  Routes,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 
 const API_BASE_URL = "http://localhost:3001";
 const FVMA_ORGANIZATION_ID = "02ff75f0-ad22-47df-a757-093953c3e882";
@@ -146,6 +153,15 @@ function toEmail(value) {
   return trimmed;
 }
 
+function isValidEmailFormat(value) {
+  const email = toEmail(value);
+  if (!email) {
+    return false;
+  }
+  // Intentionally simple/forgiving validation.
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 function parseBoolean(value, defaultValue = true) {
   if (value === undefined || value === null || String(value).trim() === "") {
     return defaultValue;
@@ -185,6 +201,8 @@ function MemberUploadPanel({ onImportComplete }) {
   const [rawRows, setRawRows] = useState([]);
   const [headers, setHeaders] = useState([]);
   const [mapping, setMapping] = useState(() => tryAutoMap([]));
+  const [existingEmails, setExistingEmails] = useState(() => new Set());
+  const [isCheckingExisting, setIsCheckingExisting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState("");
   const [uploadError, setUploadError] = useState("");
@@ -320,6 +338,8 @@ function MemberUploadPanel({ onImportComplete }) {
 
       if (!member.email) {
         problems.push("Missing email");
+      } else if (!isValidEmailFormat(member.email)) {
+        problems.push("Email looks invalid");
       }
 
       if (member.email) {
@@ -335,13 +355,48 @@ function MemberUploadPanel({ onImportComplete }) {
         rowNumber: index + 2,
         member,
         problems,
+        willUpdate: member.email ? existingEmails.has(member.email) : false,
       };
     });
 
     const valid = previewRows.filter((r) => r.problems.length === 0);
     const invalid = previewRows.filter((r) => r.problems.length > 0);
     return { previewRows, valid, invalid };
-  }, [rawRows, mapping]);
+  }, [rawRows, mapping, existingEmails]);
+
+  useEffect(() => {
+    async function checkExisting() {
+      if (!rawRows.length || !mapping.email) {
+        setExistingEmails(new Set());
+        return;
+      }
+
+      const emails = rawRows
+        .map((row) => toEmail(getCellValue(row, mapping.email)))
+        .filter(Boolean);
+
+      if (!emails.length) {
+        setExistingEmails(new Set());
+        return;
+      }
+
+      setIsCheckingExisting(true);
+      try {
+        const result = await postJson(`${API_BASE_URL}/api/members/existing-emails`, {
+          organization_id: FVMA_ORGANIZATION_ID,
+          emails,
+        });
+        setExistingEmails(new Set(result.existing_emails || []));
+      } catch {
+        // If this check fails, we still allow import—just won't show update/create status.
+        setExistingEmails(new Set());
+      } finally {
+        setIsCheckingExisting(false);
+      }
+    }
+
+    checkExisting();
+  }, [rawRows, mapping.email]);
 
   const handleUpload = async () => {
     if (!selectedFile) {
@@ -493,6 +548,11 @@ function MemberUploadPanel({ onImportComplete }) {
               flagged
             </p>
           ) : null}
+          {rawRows.length ? (
+            <p className="text-sm text-slate-500">
+              {isCheckingExisting ? "Checking existing emails..." : "Preview shows create vs update."}
+            </p>
+          ) : null}
           {uploadMessage ? (
             <p className="text-sm font-medium text-emerald-700">{uploadMessage}</p>
           ) : null}
@@ -506,7 +566,7 @@ function MemberUploadPanel({ onImportComplete }) {
             <thead className="bg-slate-50">
               <tr>
                 <th className="px-4 py-2 font-semibold text-slate-700">Row</th>
-                <th className="px-4 py-2 font-semibold text-slate-700">Status</th>
+                <th className="px-4 py-2 font-semibold text-slate-700">Action</th>
                 <th className="px-4 py-2 font-semibold text-slate-700">Full name</th>
                 <th className="px-4 py-2 font-semibold text-slate-700">Email</th>
                 <th className="px-4 py-2 font-semibold text-slate-700">Phone</th>
@@ -522,10 +582,16 @@ function MemberUploadPanel({ onImportComplete }) {
                       className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
                         row.problems.length
                           ? "bg-rose-100 text-rose-700"
-                          : "bg-emerald-100 text-emerald-700"
+                          : row.willUpdate
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-emerald-100 text-emerald-700"
                       }`}
                     >
-                      {row.problems.length ? "Flagged" : "Ready"}
+                      {row.problems.length
+                        ? "Flagged"
+                        : row.willUpdate
+                          ? "Will be updated"
+                          : "Will be created"}
                     </span>
                   </td>
                   <td className="px-4 py-2 text-slate-900">{row.member.full_name || "-"}</td>
@@ -1237,6 +1303,125 @@ function ReportsPage() {
   );
 }
 
+function FVMAWordmark() {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-teal-700 text-sm font-bold text-white">
+        FVMA
+      </div>
+      <div>
+        <div className="text-sm font-semibold tracking-wide text-slate-900">
+          Florida Veterinary Medical Association
+        </div>
+        <div className="text-xs text-slate-500">Disaster Response</div>
+      </div>
+    </div>
+  );
+}
+
+function RespondPage({ token: tokenProp }) {
+  const [searchParams] = useSearchParams();
+  const token = tokenProp || searchParams.get("token") || "";
+
+  const [resolved, setResolved] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [started, setStarted] = useState(false);
+
+  useEffect(() => {
+    async function resolveToken() {
+      setIsLoading(true);
+      setError("");
+      setResolved(null);
+      setStarted(false);
+
+      if (!token) {
+        setIsLoading(false);
+        setError("Missing token in URL.");
+        return;
+      }
+
+      try {
+        const data = await fetchJson(
+          `${API_BASE_URL}/api/outreach/resolve?token=${encodeURIComponent(
+            token,
+          )}`,
+        );
+        setResolved(data);
+      } catch (err) {
+        setError(err.message || "Failed to resolve token.");
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    resolveToken();
+  }, [token]);
+
+  const memberName = resolved?.contact_name || "FVMA member";
+
+  return (
+    <main className="mx-auto max-w-3xl px-4 py-10">
+      <section className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+        <FVMAWordmark />
+
+        <h2 className="mt-6 text-2xl font-semibold tracking-tight text-slate-900">
+          Hello, {memberName}.
+        </h2>
+
+        <p className="mt-3 text-sm text-slate-600">
+          We&apos;re connecting you to a short conversation with an AI voice agent
+          to coordinate disaster response next steps.
+        </p>
+
+        {!started ? (
+          <div className="mt-7">
+            <button
+              type="button"
+              onClick={() => setStarted(true)}
+              className="w-full rounded-md bg-teal-700 px-6 py-3 text-center text-sm font-semibold text-white hover:bg-teal-800"
+              disabled={isLoading || !resolved}
+            >
+              Start Conversation
+            </button>
+            {error ? (
+              <p className="mt-3 text-sm font-medium text-rose-700">{error}</p>
+            ) : null}
+            {token ? (
+              <p className="mt-2 text-xs text-slate-500">
+                Token resolved: <span className="font-mono">{token.slice(0, 8)}…</span>
+              </p>
+            ) : null}
+          </div>
+        ) : (
+          <div className="mt-7 rounded-xl border border-slate-200 bg-slate-50 p-5">
+            <p className="text-sm font-semibold text-slate-900">
+              Voice Agent Placeholder
+            </p>
+            <p className="mt-2 text-sm text-slate-600">
+              Bland.ai integration will go here. For now, this page confirms you
+              have the correct outreach token and are ready to start.
+            </p>
+          </div>
+        )}
+
+        {isLoading ? (
+          <p className="mt-5 text-sm text-slate-600">Loading your request…</p>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+function RootWithToken() {
+  const [searchParams] = useSearchParams();
+  const token = searchParams.get("token");
+  if (token) {
+    return <RespondPage token={token} />;
+  }
+  return <DashboardPage />;
+}
+
 function Navigation() {
   const linkClass = ({ isActive }) =>
     `rounded-md px-3 py-2 text-sm font-medium ${
@@ -1278,10 +1463,11 @@ function App() {
         </div>
       </header>
       <Routes>
-        <Route path="/" element={<DashboardPage />} />
+        <Route path="/" element={<RootWithToken />} />
         <Route path="/members" element={<MembersPage />} />
         <Route path="/events" element={<EventsPage />} />
         <Route path="/events/:eventId/outreach" element={<OutreachLauncherPage />} />
+        <Route path="/respond" element={<RespondPage />} />
         <Route path="/reports" element={<ReportsPage />} />
       </Routes>
     </div>
