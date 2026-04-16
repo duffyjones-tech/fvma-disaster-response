@@ -3,10 +3,16 @@ import cors from "cors";
 import multer from "multer";
 import XLSX from "xlsx";
 import { extname } from "node:path";
+import { randomUUID } from "node:crypto";
+import sendgridMail from "@sendgrid/mail";
 import { supabase } from "./supabaseClient.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
+const SENDGRID_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "";
+const OUTREACH_LINK_BASE_URL = process.env.OUTREACH_LINK_BASE_URL || "";
+const DEFAULT_ORGANIZATION_ID = process.env.DEFAULT_ORGANIZATION_ID || "";
 const ORGANIZATION_COLUMNS = [
   "id",
   "name",
@@ -111,17 +117,44 @@ function slugify(value) {
     .slice(0, 80);
 }
 
+function extractOutreachToken(notes) {
+  const raw = toNullableText(notes);
+  if (!raw) {
+    return null;
+  }
+  const match = raw.match(/outreach_token:([0-9a-fA-F-]{16,})/);
+  return match ? match[1] : null;
+}
+
+function buildOutreachLink(token) {
+  if (!OUTREACH_LINK_BASE_URL) {
+    return null;
+  }
+  const base = OUTREACH_LINK_BASE_URL.endsWith("/")
+    ? OUTREACH_LINK_BASE_URL.slice(0, -1)
+    : OUTREACH_LINK_BASE_URL;
+  return `${base}?token=${encodeURIComponent(token)}`;
+}
+
 function buildMemberRow(inputRow, organizationIdFromRequest) {
   const row = normalizeRowKeys(inputRow);
-  const fullName = firstPopulatedValue(row, [
+  const fullNameDirect = firstPopulatedValue(row, [
     "full_name",
     "name",
     "member_name",
     "full_name_(required)",
   ]);
 
+  const firstName = firstPopulatedValue(row, ["first_name", "firstname", "first"]);
+  const lastName = firstPopulatedValue(row, ["last_name", "lastname", "last"]);
+  const combinedName =
+    firstName || lastName
+      ? [firstName, lastName].filter(Boolean).join(" ").trim()
+      : null;
+
+  const fullName = fullNameDirect || combinedName;
   if (!fullName) {
-    return { skipReason: "missing_full_name" };
+    return { skipReason: "missing_name" };
   }
 
   const rowOrganizationId = firstPopulatedValue(row, [
@@ -131,7 +164,8 @@ function buildMemberRow(inputRow, organizationIdFromRequest) {
     "orgid",
   ]);
 
-  const organizationId = organizationIdFromRequest || rowOrganizationId || null;
+  const organizationId =
+    organizationIdFromRequest || rowOrganizationId || DEFAULT_ORGANIZATION_ID || null;
   if (!organizationId) {
     return { skipReason: "missing_organization_id" };
   }
@@ -207,6 +241,69 @@ app.get("/api/events", async (_req, res) => {
   res.json({ count: data.length, events: data });
 });
 
+app.get("/api/events/:id", async (req, res) => {
+  const eventId = toNullableText(req.params.id);
+  if (!eventId) {
+    res.status(400).json({ error: "Event id is required." });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("*")
+    .eq("id", eventId)
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to fetch event.", details: error.message });
+    return;
+  }
+
+  if (!data) {
+    res.status(404).json({ error: "Event not found." });
+    return;
+  }
+
+  res.json(data);
+});
+
+app.get("/api/events/:id/outreach-history", async (req, res) => {
+  const eventId = toNullableText(req.params.id);
+  const organizationId = toNullableText(req.query.organization_id);
+
+  if (!eventId) {
+    res.status(400).json({ error: "Event id is required." });
+    return;
+  }
+
+  if (!organizationId) {
+    res.status(400).json({ error: "organization_id query parameter is required." });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("outreach_contacts")
+    .select("id,event_id,organization_id,contact_name,email,phone,channel,notes,created_at")
+    .eq("event_id", eventId)
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    res.status(500).json({
+      error: "Failed to fetch outreach history.",
+      details: error.message,
+    });
+    return;
+  }
+
+  const records = (data || []).map((row) => ({
+    ...row,
+    token: extractOutreachToken(row.notes),
+  }));
+
+  res.json({ count: records.length, records });
+});
+
 app.post("/api/events", async (req, res) => {
   const name = toNullableText(req.body?.name);
   const activate = Boolean(req.body?.activate);
@@ -267,6 +364,213 @@ app.patch("/api/events/:id/activate", async (req, res) => {
   }
 
   res.json(data);
+});
+
+app.post("/api/events/:id/outreach-launch", async (req, res) => {
+  const eventId = toNullableText(req.params.id);
+  const organizationId = toNullableText(req.body?.organization_id);
+  const channels = Array.isArray(req.body?.channels) ? req.body.channels : [];
+
+  if (!eventId) {
+    res.status(400).json({ error: "Event id is required." });
+    return;
+  }
+
+  if (!organizationId) {
+    res.status(400).json({ error: "organization_id is required." });
+    return;
+  }
+
+  const normalizedChannels = channels
+    .map((channel) => String(channel).trim().toLowerCase())
+    .filter((channel) => channel === "email" || channel === "sms");
+
+  if (!normalizedChannels.length) {
+    res.status(400).json({ error: "Choose at least one channel: email or sms." });
+    return;
+  }
+
+  const { data: event, error: eventError } = await supabase
+    .from("events")
+    .select("*")
+    .eq("id", eventId)
+    .maybeSingle();
+
+  if (eventError) {
+    res.status(500).json({ error: "Failed to fetch event.", details: eventError.message });
+    return;
+  }
+
+  if (!event) {
+    res.status(404).json({ error: "Event not found." });
+    return;
+  }
+
+  if (event.status !== "active") {
+    res.status(400).json({ error: "Outreach can only be launched for active events." });
+    return;
+  }
+
+  const { data: members, error: membersError } = await supabase
+    .from("members")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .eq("is_active", true)
+    .order("full_name", { ascending: true });
+
+  if (membersError) {
+    res.status(500).json({
+      error: "Failed to fetch members for outreach.",
+      details: membersError.message,
+    });
+    return;
+  }
+
+  const outreachRows = [];
+  const skipped = [];
+  const pendingEmailSends = [];
+
+  members.forEach((member) => {
+    normalizedChannels.forEach((channel) => {
+      if (channel === "email" && !member.email) {
+        skipped.push({
+          member_id: member.id,
+          full_name: member.full_name,
+          channel,
+          reason: "missing_email",
+        });
+        return;
+      }
+
+      if (channel === "sms" && !member.phone) {
+        skipped.push({
+          member_id: member.id,
+          full_name: member.full_name,
+          channel,
+          reason: "missing_phone",
+        });
+        return;
+      }
+
+      const outreachToken = randomUUID();
+      const outreachLink = buildOutreachLink(outreachToken);
+
+      outreachRows.push({
+        event_id: eventId,
+        organization_id: organizationId,
+        contact_name: member.full_name,
+        email: member.email,
+        phone: member.phone,
+        channel,
+        notes: `outreach_token:${outreachToken}`,
+      });
+
+      if (channel === "email") {
+        pendingEmailSends.push({
+          to: member.email,
+          contact_name: member.full_name,
+          token: outreachToken,
+          outreach_link: outreachLink,
+        });
+      }
+    });
+  });
+
+  if (!outreachRows.length) {
+    res.status(400).json({
+      error: "No outreach records created. Check member contact info and selected channels.",
+      skipped,
+    });
+    return;
+  }
+
+  const { data: inserted, error: insertError } = await supabase
+    .from("outreach_contacts")
+    .insert(outreachRows)
+    .select("id,contact_name,channel,notes");
+
+  if (insertError) {
+    res.status(500).json({
+      error: "Failed to create outreach contact records.",
+      details: insertError.message,
+    });
+    return;
+  }
+
+  let emailSendAttempted = false;
+  let emailSendSucceeded = 0;
+  let emailSendFailed = 0;
+  const emailSendErrors = [];
+
+  if (
+    normalizedChannels.includes("email") &&
+    SENDGRID_API_KEY &&
+    SENDGRID_FROM_EMAIL &&
+    pendingEmailSends.length
+  ) {
+    emailSendAttempted = true;
+    sendgridMail.setApiKey(SENDGRID_API_KEY);
+
+    const messages = pendingEmailSends.map((entry) => ({
+      to: entry.to,
+      from: SENDGRID_FROM_EMAIL,
+      subject: `FVMA Disaster Response: ${event.name}`,
+      text: [
+        `Hello ${entry.contact_name},`,
+        "",
+        `FVMA has launched an outreach campaign for: ${event.name}.`,
+        "",
+        entry.outreach_link
+          ? `Your link: ${entry.outreach_link}`
+          : "Your link will be available once OUTREACH_LINK_BASE_URL is configured.",
+        "",
+        "Thank you,",
+        "FVMA Disaster Response",
+      ].join("\n"),
+      html: `
+        <p>Hello ${entry.contact_name},</p>
+        <p><strong>FVMA</strong> has launched an outreach campaign for: <strong>${event.name}</strong>.</p>
+        <p>
+          ${
+            entry.outreach_link
+              ? `Your link: <a href="${entry.outreach_link}">${entry.outreach_link}</a>`
+              : "Your link will be available once <code>OUTREACH_LINK_BASE_URL</code> is configured."
+          }
+        </p>
+        <p>Thank you,<br/>FVMA Disaster Response</p>
+      `,
+    }));
+
+    for (const msg of messages) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await sendgridMail.send(msg);
+        emailSendSucceeded += 1;
+      } catch (err) {
+        emailSendFailed += 1;
+        emailSendErrors.push(err?.message || "SendGrid send failed.");
+      }
+    }
+  }
+
+  res.status(201).json({
+    message:
+      emailSendAttempted
+        ? "Outreach launched. Contact records created and email sending attempted."
+        : "Outreach launched. Contact records created successfully.",
+    event_id: eventId,
+    channels: normalizedChannels,
+    created_count: inserted.length,
+    skipped_count: skipped.length,
+    skipped,
+    records: inserted,
+    email: {
+      attempted: emailSendAttempted,
+      succeeded: emailSendSucceeded,
+      failed: emailSendFailed,
+      errors: emailSendErrors.slice(0, 5),
+    },
+  });
 });
 
 app.post("/api/members/import", upload.single("file"), async (req, res) => {
@@ -344,7 +648,7 @@ app.post("/api/members/import", upload.single("file"), async (req, res) => {
   if (!memberRecords.length) {
     res.status(400).json({
       error:
-        "No valid members found. Ensure rows include full_name (or name) and organization_id.",
+        "No valid members found. Ensure rows include either full_name (or name) OR first_name/last_name. Organization_id is optional if provided in the request.",
       skippedRows,
     });
     return;
@@ -374,6 +678,135 @@ app.post("/api/members/import", upload.single("file"), async (req, res) => {
     totalRowsInFile: rows.length,
     importedRows: insertedCount,
     skippedRows,
+  });
+});
+
+app.post("/api/members/import-upsert", async (req, res) => {
+  const organizationId =
+    toNullableText(req.body?.organization_id) || DEFAULT_ORGANIZATION_ID || null;
+  const members = Array.isArray(req.body?.members) ? req.body.members : [];
+
+  if (!organizationId) {
+    res.status(400).json({ error: "organization_id is required (or set DEFAULT_ORGANIZATION_ID)." });
+    return;
+  }
+
+  if (!members.length) {
+    res.status(400).json({ error: "members array is required." });
+    return;
+  }
+
+  const normalizedByEmail = new Map();
+  const skipped = [];
+
+  for (const raw of members) {
+    const emailRaw = toNullableText(raw?.email);
+    if (!emailRaw) {
+      skipped.push({ reason: "missing_email" });
+      continue;
+    }
+
+    const email = emailRaw.trim().toLowerCase();
+    const fullNameRaw = toNullableText(raw?.full_name);
+    const fullName = (fullNameRaw && fullNameRaw.trim()) || email;
+
+    const roleRaw = toNullableText(raw?.role);
+    const normalizedRole = roleRaw ? roleRaw.trim().toLowerCase() : "volunteer";
+    const role = ALLOWED_MEMBER_ROLES.has(normalizedRole) ? normalizedRole : "volunteer";
+
+    const isActiveRaw = raw?.is_active;
+    const isActive =
+      typeof isActiveRaw === "boolean" ? isActiveRaw : parseBooleanOrDefault(isActiveRaw, true);
+
+    normalizedByEmail.set(email, {
+      organization_id: organizationId,
+      full_name: fullName,
+      email,
+      phone: toNullableText(raw?.phone),
+      role,
+      credentials: toNullableText(raw?.credentials),
+      is_active: isActive,
+    });
+  }
+
+  const normalizedMembers = Array.from(normalizedByEmail.values());
+  if (!normalizedMembers.length) {
+    res.status(400).json({ error: "No valid members to import (email is required).", skipped });
+    return;
+  }
+
+  const emailList = normalizedMembers.map((m) => m.email);
+  const existingByEmail = new Map();
+
+  const chunkSize = 500;
+  for (let start = 0; start < emailList.length; start += chunkSize) {
+    const chunk = emailList.slice(start, start + chunkSize);
+    // eslint-disable-next-line no-await-in-loop
+    const { data, error } = await supabase
+      .from("members")
+      .select("id,email")
+      .eq("organization_id", organizationId)
+      .in("email", chunk);
+
+    if (error) {
+      res.status(500).json({ error: "Failed to check existing members.", details: error.message });
+      return;
+    }
+
+    (data || []).forEach((row) => {
+      if (row.email) {
+        existingByEmail.set(String(row.email).trim().toLowerCase(), row.id);
+      }
+    });
+  }
+
+  const toInsert = [];
+  const toUpsertById = [];
+
+  normalizedMembers.forEach((member) => {
+    const existingId = existingByEmail.get(member.email);
+    if (existingId) {
+      toUpsertById.push({ id: existingId, ...member });
+    } else {
+      toInsert.push(member);
+    }
+  });
+
+  let insertedCount = 0;
+  let updatedCount = 0;
+
+  // Update existing by primary key via upsert
+  for (let start = 0; start < toUpsertById.length; start += chunkSize) {
+    const chunk = toUpsertById.slice(start, start + chunkSize);
+    // eslint-disable-next-line no-await-in-loop
+    const { error } = await supabase.from("members").upsert(chunk);
+    if (error) {
+      res.status(500).json({ error: "Failed to update existing members.", details: error.message });
+      return;
+    }
+    updatedCount += chunk.length;
+  }
+
+  // Insert new
+  for (let start = 0; start < toInsert.length; start += chunkSize) {
+    const chunk = toInsert.slice(start, start + chunkSize);
+    // eslint-disable-next-line no-await-in-loop
+    const { error } = await supabase.from("members").insert(chunk);
+    if (error) {
+      res.status(500).json({ error: "Failed to insert new members.", details: error.message });
+      return;
+    }
+    insertedCount += chunk.length;
+  }
+
+  res.status(201).json({
+    message: "Member import complete (upsert by email).",
+    organization_id: organizationId,
+    received: members.length,
+    unique_emails: normalizedMembers.length,
+    inserted: insertedCount,
+    updated: updatedCount,
+    skipped_count: skipped.length,
   });
 });
 

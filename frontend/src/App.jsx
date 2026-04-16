@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 
 const API_BASE_URL = "http://localhost:3001";
 const FVMA_ORGANIZATION_ID = "02ff75f0-ad22-47df-a757-093953c3e882";
@@ -92,38 +92,99 @@ function StatCard({ label, value, helpText }) {
   );
 }
 
-function parseMemberPreviewRows(rawRows) {
-  return rawRows
-    .map((rawRow) => {
-      const row = Object.fromEntries(
-        Object.entries(rawRow).map(([key, value]) => [
-          String(key).trim().toLowerCase().replace(/\s+/g, "_"),
-          value,
-        ]),
-      );
+function normalizeHeaderForMatch(value) {
+  return String(value).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
 
-      const full_name =
-        row.full_name || row.name || row.member_name || row["full_name_(required)"] || "";
+const MEMBER_IMPORT_FIELDS = [
+  { key: "email", label: "Email (required)" },
+  { key: "first_name", label: "First name" },
+  { key: "last_name", label: "Last name" },
+  { key: "full_name", label: "Full name" },
+  { key: "phone", label: "Phone" },
+  { key: "role", label: "Role" },
+  { key: "credentials", label: "Credentials" },
+  { key: "is_active", label: "Active (true/false)" },
+];
 
-      if (!String(full_name).trim()) {
-        return null;
-      }
+const FIELD_SYNONYMS = {
+  email: ["email", "emailaddress", "e-mail", "mail", "email_address"],
+  first_name: ["firstname", "first_name", "first name", "givenname", "given_name", "first"],
+  last_name: ["lastname", "last_name", "last name", "surname", "familyname", "family_name", "last"],
+  full_name: ["fullname", "full_name", "full name", "name", "membername", "member_name"],
+  phone: ["phone", "phonenumber", "phone_number", "mobile", "cell", "cellphone", "cell_phone"],
+  role: ["role", "memberrole", "member_role", "position", "member_type"],
+  credentials: ["credentials", "license", "licensenumber", "license_number"],
+  is_active: ["isactive", "is_active", "active", "enabled", "status"],
+};
 
-      return {
-        full_name: String(full_name).trim(),
-        email: row.email || row.email_address || "",
-        phone: row.phone || row.phone_number || "",
-        role: row.role || row.member_role || "volunteer",
-        credentials: row.credentials || row.license || row.license_number || "",
-      };
-    })
-    .filter(Boolean);
+function tryAutoMap(headers) {
+  const normalizedHeaders = headers.map((h) => ({
+    original: h,
+    normalized: normalizeHeaderForMatch(h),
+  }));
+
+  const mapping = {};
+  for (const field of MEMBER_IMPORT_FIELDS) {
+    const synonyms = (FIELD_SYNONYMS[field.key] || []).map(normalizeHeaderForMatch);
+    const match = normalizedHeaders.find((h) => synonyms.includes(h.normalized));
+    mapping[field.key] = match ? match.original : "";
+  }
+  return mapping;
+}
+
+function getCellValue(row, headerName) {
+  if (!headerName) {
+    return "";
+  }
+  return row?.[headerName] ?? "";
+}
+
+function toEmail(value) {
+  const raw = value === undefined || value === null ? "" : String(value);
+  const trimmed = raw.trim().toLowerCase();
+  return trimmed;
+}
+
+function parseBoolean(value, defaultValue = true) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return defaultValue;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "y"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "n"].includes(normalized)) {
+    return false;
+  }
+  return defaultValue;
+}
+
+function buildMemberFromRow(row, mapping) {
+  const email = toEmail(getCellValue(row, mapping.email));
+
+  const firstNameRaw = String(getCellValue(row, mapping.first_name) ?? "").trim();
+  const lastNameRaw = String(getCellValue(row, mapping.last_name) ?? "").trim();
+  const fullNameRaw = String(getCellValue(row, mapping.full_name) ?? "").trim();
+  const combinedName = [firstNameRaw, lastNameRaw].filter(Boolean).join(" ").trim();
+  const full_name = fullNameRaw || combinedName || email;
+
+  return {
+    email,
+    full_name,
+    phone: String(getCellValue(row, mapping.phone) ?? "").trim() || null,
+    role: String(getCellValue(row, mapping.role) ?? "").trim() || "volunteer",
+    credentials: String(getCellValue(row, mapping.credentials) ?? "").trim() || null,
+    is_active: parseBoolean(getCellValue(row, mapping.is_active), true),
+  };
 }
 
 function MemberUploadPanel({ onImportComplete }) {
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
-  const [previewRows, setPreviewRows] = useState([]);
+  const [rawRows, setRawRows] = useState([]);
+  const [headers, setHeaders] = useState([]);
+  const [mapping, setMapping] = useState(() => tryAutoMap([]));
   const [isUploading, setIsUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState("");
   const [uploadError, setUploadError] = useState("");
@@ -209,8 +270,12 @@ function MemberUploadPanel({ onImportComplete }) {
     }
 
     const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
-    const normalizedRows = parseMemberPreviewRows(rows);
-    setPreviewRows(normalizedRows);
+    const detectedHeaders =
+      rows.length > 0 ? Object.keys(rows[0]) : XLSX.utils.sheet_to_json(firstSheet, { header: 1 })[0] || [];
+
+    setRawRows(rows);
+    setHeaders(detectedHeaders);
+    setMapping(tryAutoMap(detectedHeaders));
   }, []);
 
   const handleFileSelection = useCallback(
@@ -226,7 +291,8 @@ function MemberUploadPanel({ onImportComplete }) {
       try {
         await parseFileForPreview(file);
       } catch (error) {
-        setPreviewRows([]);
+        setRawRows([]);
+        setHeaders([]);
         setUploadError(error.message || "Unable to preview file.");
       }
     },
@@ -246,24 +312,66 @@ function MemberUploadPanel({ onImportComplete }) {
     await handleFileSelection(file);
   };
 
+  const preview = useMemo(() => {
+    const emailsInFile = new Map();
+    const previewRows = rawRows.map((row, index) => {
+      const member = buildMemberFromRow(row, mapping);
+      const problems = [];
+
+      if (!member.email) {
+        problems.push("Missing email");
+      }
+
+      if (member.email) {
+        const existingRow = emailsInFile.get(member.email);
+        if (existingRow) {
+          problems.push(`Duplicate email in file (also seen on row ${existingRow})`);
+        } else {
+          emailsInFile.set(member.email, index + 2);
+        }
+      }
+
+      return {
+        rowNumber: index + 2,
+        member,
+        problems,
+      };
+    });
+
+    const valid = previewRows.filter((r) => r.problems.length === 0);
+    const invalid = previewRows.filter((r) => r.problems.length > 0);
+    return { previewRows, valid, invalid };
+  }, [rawRows, mapping]);
+
   const handleUpload = async () => {
     if (!selectedFile) {
       setUploadError("Please choose a CSV or Excel file first.");
       return;
     }
 
-    const formData = new FormData();
-    formData.append("organization_id", FVMA_ORGANIZATION_ID);
-    formData.append("file", selectedFile);
+    if (!mapping.email) {
+      setUploadError("Please map the Email column before importing.");
+      return;
+    }
+
+    const membersToImport = preview.valid.map((row) => row.member);
+    if (!membersToImport.length) {
+      setUploadError("No valid rows to import. Email is required.");
+      return;
+    }
 
     setIsUploading(true);
     setUploadError("");
     setUploadMessage("");
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/members/import`, {
+      const response = await fetch(`${API_BASE_URL}/api/members/import-upsert`, {
         method: "POST",
-        body: formData,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          organization_id: FVMA_ORGANIZATION_ID,
+          members: membersToImport,
+        }),
       });
       const payload = await response.json();
 
@@ -272,7 +380,7 @@ function MemberUploadPanel({ onImportComplete }) {
       }
 
       setUploadMessage(
-        `Import complete: ${payload.importedRows} member(s) saved. Skipped ${payload.skippedRows.length} row(s).`,
+        `Import complete: inserted ${payload.inserted}, updated ${payload.updated}. Skipped ${payload.skipped_count}.`,
       );
       await onImportComplete();
     } catch (error) {
@@ -337,15 +445,54 @@ function MemberUploadPanel({ onImportComplete }) {
           ) : null}
         </label>
 
+        {headers.length ? (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <h4 className="text-sm font-semibold text-slate-800">Column mapping</h4>
+            <p className="mt-1 text-sm text-slate-600">
+              We auto-detected what we could. For anything blank, choose the correct column.
+              Only <span className="font-medium">Email</span> is required.
+            </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {MEMBER_IMPORT_FIELDS.map((field) => (
+                <label key={field.key} className="block">
+                  <span className="text-xs font-medium text-slate-700">{field.label}</span>
+                  <select
+                    value={mapping[field.key] || ""}
+                    onChange={(e) =>
+                      setMapping((prev) => ({ ...prev, [field.key]: e.target.value }))
+                    }
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 shadow-sm"
+                  >
+                    <option value="">— None —</option>
+                    {headers.map((h) => (
+                      <option key={h} value={h}>
+                        {h}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={handleUpload}
-            disabled={!selectedFile || isUploading}
+            disabled={!selectedFile || isUploading || !rawRows.length}
             className="rounded-md bg-teal-700 px-4 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {isUploading ? "Uploading..." : "Save Members to Database"}
           </button>
+          {rawRows.length ? (
+            <p className="text-sm text-slate-600">
+              Ready: <span className="font-medium text-slate-800">{preview.valid.length}</span>{" "}
+              valid,{" "}
+              <span className="font-medium text-slate-800">{preview.invalid.length}</span>{" "}
+              flagged
+            </p>
+          ) : null}
           {uploadMessage ? (
             <p className="text-sm font-medium text-emerald-700">{uploadMessage}</p>
           ) : null}
@@ -358,26 +505,40 @@ function MemberUploadPanel({ onImportComplete }) {
           <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
             <thead className="bg-slate-50">
               <tr>
-                <th className="px-4 py-2 font-semibold text-slate-700">Name</th>
-                <th className="px-4 py-2 font-semibold text-slate-700">Role</th>
+                <th className="px-4 py-2 font-semibold text-slate-700">Row</th>
+                <th className="px-4 py-2 font-semibold text-slate-700">Status</th>
+                <th className="px-4 py-2 font-semibold text-slate-700">Full name</th>
                 <th className="px-4 py-2 font-semibold text-slate-700">Email</th>
                 <th className="px-4 py-2 font-semibold text-slate-700">Phone</th>
-                <th className="px-4 py-2 font-semibold text-slate-700">Credentials</th>
+                <th className="px-4 py-2 font-semibold text-slate-700">Problems</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {previewRows.slice(0, 20).map((row, index) => (
-                <tr key={`${row.full_name}-${index}`}>
-                  <td className="px-4 py-2 text-slate-900">{row.full_name}</td>
-                  <td className="px-4 py-2 text-slate-700">{row.role || "-"}</td>
-                  <td className="px-4 py-2 text-slate-700">{row.email || "-"}</td>
-                  <td className="px-4 py-2 text-slate-700">{row.phone || "-"}</td>
-                  <td className="px-4 py-2 text-slate-700">{row.credentials || "-"}</td>
+              {preview.previewRows.slice(0, 25).map((row) => (
+                <tr key={row.rowNumber}>
+                  <td className="px-4 py-2 text-slate-700">{row.rowNumber}</td>
+                  <td className="px-4 py-2">
+                    <span
+                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                        row.problems.length
+                          ? "bg-rose-100 text-rose-700"
+                          : "bg-emerald-100 text-emerald-700"
+                      }`}
+                    >
+                      {row.problems.length ? "Flagged" : "Ready"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-slate-900">{row.member.full_name || "-"}</td>
+                  <td className="px-4 py-2 text-slate-700">{row.member.email || "-"}</td>
+                  <td className="px-4 py-2 text-slate-700">{row.member.phone || "-"}</td>
+                  <td className="px-4 py-2 text-slate-700">
+                    {row.problems.length ? row.problems.join("; ") : "-"}
+                  </td>
                 </tr>
               ))}
-              {!previewRows.length ? (
+              {!preview.previewRows.length ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-5 text-center text-slate-500">
+                  <td colSpan={6} className="px-4 py-5 text-center text-slate-500">
                     Upload a file to preview members before saving.
                   </td>
                 </tr>
@@ -385,9 +546,9 @@ function MemberUploadPanel({ onImportComplete }) {
             </tbody>
           </table>
         </div>
-        {previewRows.length > 20 ? (
+        {preview.previewRows.length > 25 ? (
           <p className="text-xs text-slate-500">
-            Showing first 20 rows of {previewRows.length} parsed members.
+            Showing first 25 rows of {preview.previewRows.length}.
           </p>
         ) : null}
       </div>
@@ -780,9 +941,17 @@ function EventsPage() {
                       Activate
                     </button>
                   ) : (
-                    <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">
-                      Active
-                    </span>
+                    <>
+                      <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">
+                        Active
+                      </span>
+                      <Link
+                        to={`/events/${evt.id}/outreach`}
+                        className="rounded-md border border-teal-300 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-800 hover:bg-teal-100"
+                      >
+                        Launch Outreach
+                      </Link>
+                    </>
                   )}
                 </div>
               </div>
@@ -792,6 +961,264 @@ function EventsPage() {
             ) : null}
           </div>
         )}
+      </section>
+    </main>
+  );
+}
+
+function OutreachLauncherPage() {
+  const { eventId } = useParams();
+  const [event, setEvent] = useState(null);
+  const [members, setMembers] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [useEmail, setUseEmail] = useState(true);
+  const [useSms, setUseSms] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const [eventData, membersData, historyData] = await Promise.all([
+        fetchJson(`${API_BASE_URL}/api/events/${eventId}`),
+        fetchJson(
+          `${API_BASE_URL}/api/members?organization_id=${FVMA_ORGANIZATION_ID}`,
+        ),
+        fetchJson(
+          `${API_BASE_URL}/api/events/${eventId}/outreach-history?organization_id=${FVMA_ORGANIZATION_ID}`,
+        ),
+      ]);
+
+      const activeMembers = (membersData.members || []).filter(
+        (member) => member.is_active,
+      );
+
+      setEvent(eventData);
+      setMembers(activeMembers);
+      setHistory(historyData.records || []);
+    } catch (err) {
+      setError(err.message || "Failed to load outreach preview.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [eventId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const sendOutreach = async () => {
+    const channels = [];
+    if (useEmail) {
+      channels.push("email");
+    }
+    if (useSms) {
+      channels.push("sms");
+    }
+
+    if (!channels.length) {
+      setError("Please select at least one channel (Email or SMS).");
+      return;
+    }
+
+    setIsSending(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const result = await postJson(`${API_BASE_URL}/api/events/${eventId}/outreach-launch`, {
+        organization_id: FVMA_ORGANIZATION_ID,
+        channels,
+      });
+
+      setMessage(
+        `Success: ${result.created_count} outreach contact record(s) created. ${result.skipped_count} skipped.`,
+      );
+      await loadData();
+    } catch (err) {
+      setError(err.message || "Failed to send outreach.");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <main className="mx-auto max-w-6xl px-4 py-10">
+        <p className="text-slate-600">Loading outreach preview...</p>
+      </main>
+    );
+  }
+
+  if (error && !event) {
+    return (
+      <main className="mx-auto max-w-6xl px-4 py-10">
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-700">
+          <p className="font-medium">Could not load outreach page.</p>
+          <p className="mt-1 text-sm">{error}</p>
+        </div>
+      </main>
+    );
+  }
+
+  const emailEligible = members.filter((member) => Boolean(member.email)).length;
+  const smsEligible = members.filter((member) => Boolean(member.phone)).length;
+  const isEventActive = event?.status === "active";
+
+  return (
+    <main className="mx-auto max-w-6xl space-y-6 px-4 py-8">
+      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">
+              Outreach Campaign Launcher
+            </p>
+            <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+              {event?.name}
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Event status:{" "}
+              <span className="font-medium text-slate-800">{event?.status}</span>
+            </p>
+          </div>
+          <Link
+            to="/events"
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Back to Events
+          </Link>
+        </div>
+
+        {!isEventActive ? (
+          <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            This event is not active yet. Activate it on the Events page before launching outreach.
+          </div>
+        ) : null}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-900">Channels</h3>
+        <p className="mt-1 text-sm text-slate-600">
+          Choose which channels to use for this outreach campaign.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-5">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={useEmail}
+              onChange={(e) => setUseEmail(e.target.checked)}
+              className="h-4 w-4 accent-teal-700"
+            />
+            Email ({emailEligible} with email)
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={useSms}
+              onChange={(e) => setUseSms(e.target.checked)}
+              className="h-4 w-4 accent-teal-700"
+            />
+            SMS ({smsEligible} with phone)
+          </label>
+        </div>
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={sendOutreach}
+            disabled={isSending || !isEventActive}
+            className="rounded-md bg-teal-700 px-4 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {isSending ? "Sending Outreach..." : "Send Outreach"}
+          </button>
+          {message ? <p className="text-sm font-medium text-emerald-700">{message}</p> : null}
+          {error ? <p className="text-sm font-medium text-rose-700">{error}</p> : null}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-6 py-4">
+          <h3 className="text-lg font-semibold text-slate-900">Members to Contact</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            {members.length} active member(s) are eligible for outreach consideration.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-6 py-3 font-semibold text-slate-700">Name</th>
+                <th className="px-6 py-3 font-semibold text-slate-700">Email</th>
+                <th className="px-6 py-3 font-semibold text-slate-700">Phone</th>
+                <th className="px-6 py-3 font-semibold text-slate-700">Can Email</th>
+                <th className="px-6 py-3 font-semibold text-slate-700">Can SMS</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {members.map((member) => (
+                <tr key={member.id}>
+                  <td className="px-6 py-3 text-slate-900">{member.full_name}</td>
+                  <td className="px-6 py-3 text-slate-700">{member.email || "-"}</td>
+                  <td className="px-6 py-3 text-slate-700">{member.phone || "-"}</td>
+                  <td className="px-6 py-3 text-slate-700">{member.email ? "Yes" : "No"}</td>
+                  <td className="px-6 py-3 text-slate-700">{member.phone ? "Yes" : "No"}</td>
+                </tr>
+              ))}
+              {!members.length ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
+                    No active members found for this organization.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-6 py-4">
+          <h3 className="text-lg font-semibold text-slate-900">Outreach History</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            Records created for this event (most recent first).
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-6 py-3 font-semibold text-slate-700">Timestamp</th>
+                <th className="px-6 py-3 font-semibold text-slate-700">Channel</th>
+                <th className="px-6 py-3 font-semibold text-slate-700">Contact</th>
+                <th className="px-6 py-3 font-semibold text-slate-700">Token</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {history.map((row) => (
+                <tr key={row.id}>
+                  <td className="px-6 py-3 text-slate-700">
+                    {row.created_at ? new Date(row.created_at).toLocaleString() : "-"}
+                  </td>
+                  <td className="px-6 py-3 text-slate-700">{row.channel}</td>
+                  <td className="px-6 py-3 text-slate-900">{row.contact_name}</td>
+                  <td className="px-6 py-3 font-mono text-xs text-slate-700">
+                    {row.token || "-"}
+                  </td>
+                </tr>
+              ))}
+              {!history.length ? (
+                <tr>
+                  <td colSpan={4} className="px-6 py-8 text-center text-slate-500">
+                    No outreach records yet.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </section>
     </main>
   );
@@ -854,6 +1281,7 @@ function App() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/members" element={<MembersPage />} />
         <Route path="/events" element={<EventsPage />} />
+        <Route path="/events/:eventId/outreach" element={<OutreachLauncherPage />} />
         <Route path="/reports" element={<ReportsPage />} />
       </Routes>
     </div>
