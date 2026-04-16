@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { NavLink, Route, Routes } from "react-router-dom";
 
 const API_BASE_URL = "http://localhost:3001";
 const FVMA_ORGANIZATION_ID = "02ff75f0-ad22-47df-a757-093953c3e882";
@@ -16,6 +17,56 @@ async function fetchJson(url) {
   } else {
     parsed = null;
   }
+
+  if (!response.ok) {
+    const message =
+      parsed?.error ||
+      (rawBody ? rawBody.slice(0, 180) : `HTTP ${response.status}`);
+    throw new Error(message);
+  }
+
+  if (!isJson) {
+    throw new Error("API returned non-JSON response. Check backend route/server.");
+  }
+
+  return parsed;
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  const rawBody = await response.text();
+  const contentType = response.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+  const parsed = isJson && rawBody ? JSON.parse(rawBody) : null;
+
+  if (!response.ok) {
+    const message =
+      parsed?.error ||
+      (rawBody ? rawBody.slice(0, 180) : `HTTP ${response.status}`);
+    throw new Error(message);
+  }
+
+  if (!isJson) {
+    throw new Error("API returned non-JSON response. Check backend route/server.");
+  }
+
+  return parsed;
+}
+
+async function patchJson(url, body) {
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  const rawBody = await response.text();
+  const contentType = response.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+  const parsed = isJson && rawBody ? JSON.parse(rawBody) : null;
 
   if (!response.ok) {
     const message =
@@ -344,7 +395,7 @@ function MemberUploadPanel({ onImportComplete }) {
   );
 }
 
-function Dashboard() {
+function DashboardPage() {
   const [organization, setOrganization] = useState(null);
   const [members, setMembers] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -506,8 +557,280 @@ function Dashboard() {
           </table>
         </div>
       </section>
-      <MemberUploadPanel onImportComplete={loadDashboard} />
     </main>
+  );
+}
+
+function MembersPage() {
+  const [members, setMembers] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const loadMembers = useCallback(async () => {
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const membersData = await fetchJson(
+        `${API_BASE_URL}/api/members?organization_id=${FVMA_ORGANIZATION_ID}`,
+      );
+      setMembers(membersData.members || []);
+    } catch (err) {
+      setError(err.message || "Unexpected members error.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMembers();
+  }, [loadMembers]);
+
+  return (
+    <main className="mx-auto max-w-6xl space-y-6 px-4 py-8">
+      <MemberUploadPanel onImportComplete={loadMembers} />
+
+      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-6 py-4">
+          <h2 className="text-lg font-semibold text-slate-900">All Members</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Members currently saved for FVMA ({members.length}).
+          </p>
+        </div>
+
+        {isLoading ? (
+          <div className="px-6 py-10 text-slate-600">Loading members...</div>
+        ) : error ? (
+          <div className="px-6 py-10 text-rose-700">{error}</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-6 py-3 font-semibold text-slate-700">Name</th>
+                  <th className="px-6 py-3 font-semibold text-slate-700">Role</th>
+                  <th className="px-6 py-3 font-semibold text-slate-700">Email</th>
+                  <th className="px-6 py-3 font-semibold text-slate-700">Phone</th>
+                  <th className="px-6 py-3 font-semibold text-slate-700">Active</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {members.map((member) => (
+                  <tr key={member.id}>
+                    <td className="px-6 py-3 text-slate-900">{member.full_name}</td>
+                    <td className="px-6 py-3 text-slate-700">{member.role}</td>
+                    <td className="px-6 py-3 text-slate-700">{member.email || "-"}</td>
+                    <td className="px-6 py-3 text-slate-700">{member.phone || "-"}</td>
+                    <td className="px-6 py-3">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                          member.is_active
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-slate-200 text-slate-700"
+                        }`}
+                      >
+                        {member.is_active ? "Yes" : "No"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {!members.length ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
+                      No members found yet.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function EventsPage() {
+  const [events, setEvents] = useState([]);
+  const [name, setName] = useState("");
+  const [activate, setActivate] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  const loadEvents = useCallback(async () => {
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const data = await fetchJson(`${API_BASE_URL}/api/events`);
+      setEvents(data.events || []);
+    } catch (err) {
+      setError(err.message || "Failed to load events.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadEvents();
+  }, [loadEvents]);
+
+  const handleCreate = async (event) => {
+    event.preventDefault();
+    setIsSaving(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const created = await postJson(`${API_BASE_URL}/api/events`, {
+        name,
+        activate,
+      });
+      setMessage(`Created event: ${created.name}`);
+      setName("");
+      await loadEvents();
+    } catch (err) {
+      setError(err.message || "Failed to create event.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleActivate = async (eventId) => {
+    setError("");
+    setMessage("");
+    try {
+      await patchJson(`${API_BASE_URL}/api/events/${eventId}/activate`);
+      setMessage("Event activated.");
+      await loadEvents();
+    } catch (err) {
+      setError(err.message || "Failed to activate event.");
+    }
+  };
+
+  return (
+    <main className="mx-auto max-w-6xl space-y-6 px-4 py-8">
+      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-6 py-4">
+          <h2 className="text-lg font-semibold text-slate-900">Create Disaster Event</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Example: Hurricane Milton
+          </p>
+        </div>
+        <form onSubmit={handleCreate} className="space-y-4 px-6 py-5">
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Event name
+            </label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Hurricane Milton"
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-100"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={activate}
+              onChange={(e) => setActivate(e.target.checked)}
+              className="h-4 w-4 accent-teal-700"
+            />
+            Activate immediately
+          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              disabled={!name.trim() || isSaving}
+              className="rounded-md bg-teal-700 px-4 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isSaving ? "Creating..." : "Create Event"}
+            </button>
+            {message ? <p className="text-sm font-medium text-emerald-700">{message}</p> : null}
+            {error ? <p className="text-sm font-medium text-rose-700">{error}</p> : null}
+          </div>
+        </form>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-6 py-4">
+          <h3 className="text-lg font-semibold text-slate-900">Events</h3>
+        </div>
+        {isLoading ? (
+          <div className="px-6 py-10 text-slate-600">Loading events...</div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {events.map((evt) => (
+              <div key={evt.id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
+                <div>
+                  <p className="font-medium text-slate-900">{evt.name}</p>
+                  <p className="text-sm text-slate-600">
+                    Status: <span className="font-medium">{evt.status}</span>
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {evt.status !== "active" ? (
+                    <button
+                      type="button"
+                      onClick={() => handleActivate(evt.id)}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Activate
+                    </button>
+                  ) : (
+                    <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">
+                      Active
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+            {!events.length ? (
+              <div className="px-6 py-10 text-slate-500">No events yet.</div>
+            ) : null}
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function ReportsPage() {
+  return (
+    <main className="mx-auto max-w-6xl px-4 py-10">
+      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Reports</h2>
+        <p className="mt-2 text-sm text-slate-600">
+          Coming soon: exportable reports for outreach, responses, and staffing.
+        </p>
+      </section>
+    </main>
+  );
+}
+
+function Navigation() {
+  const linkClass = ({ isActive }) =>
+    `rounded-md px-3 py-2 text-sm font-medium ${
+      isActive ? "bg-teal-50 text-teal-800" : "text-slate-600 hover:bg-slate-50"
+    }`;
+
+  return (
+    <nav className="flex flex-wrap items-center gap-2">
+      <NavLink to="/" end className={linkClass}>
+        Dashboard
+      </NavLink>
+      <NavLink to="/members" className={linkClass}>
+        Members
+      </NavLink>
+      <NavLink to="/events" className={linkClass}>
+        Events
+      </NavLink>
+      <NavLink to="/reports" className={linkClass}>
+        Reports
+      </NavLink>
+    </nav>
   );
 }
 
@@ -516,13 +839,23 @@ function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-          <h1 className="text-lg font-semibold tracking-tight text-slate-800">
-            FVMA Disaster Response
-          </h1>
-          <p className="text-sm text-slate-500">Florida Veterinary Medical Association</p>
+          <div className="space-y-0.5">
+            <h1 className="text-lg font-semibold tracking-tight text-slate-800">
+              FVMA Disaster Response
+            </h1>
+            <p className="text-sm text-slate-500">
+              Florida Veterinary Medical Association
+            </p>
+          </div>
+          <Navigation />
         </div>
       </header>
-      <Dashboard />
+      <Routes>
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/members" element={<MembersPage />} />
+        <Route path="/events" element={<EventsPage />} />
+        <Route path="/reports" element={<ReportsPage />} />
+      </Routes>
     </div>
   );
 }

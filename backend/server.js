@@ -101,6 +101,16 @@ function toNullableText(value) {
   return text === "" ? null : text;
 }
 
+function slugify(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/['"]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
 function buildMemberRow(inputRow, organizationIdFromRequest) {
   const row = normalizeRowKeys(inputRow);
   const fullName = firstPopulatedValue(row, [
@@ -177,6 +187,82 @@ app.get("/api/organizations/:id", async (req, res) => {
 
   if (!data) {
     res.status(404).json({ error: "Organization not found." });
+    return;
+  }
+
+  res.json(data);
+});
+
+app.get("/api/events", async (_req, res) => {
+  const { data, error } = await supabase
+    .from("events")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    res.status(500).json({ error: "Failed to fetch events.", details: error.message });
+    return;
+  }
+
+  res.json({ count: data.length, events: data });
+});
+
+app.post("/api/events", async (req, res) => {
+  const name = toNullableText(req.body?.name);
+  const activate = Boolean(req.body?.activate);
+  const eventType = toNullableText(req.body?.event_type) || "other";
+  const description = toNullableText(req.body?.description);
+
+  if (!name) {
+    res.status(400).json({ error: "Event name is required." });
+    return;
+  }
+
+  const baseSlug = slugify(name);
+  const eventRow = {
+    name,
+    slug: baseSlug || null,
+    description,
+    event_type: eventType,
+    status: activate ? "active" : "draft",
+    starts_at: activate ? new Date().toISOString() : null,
+  };
+
+  const { data, error } = await supabase
+    .from("events")
+    .insert(eventRow)
+    .select("*")
+    .single();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to create event.", details: error.message });
+    return;
+  }
+
+  res.status(201).json(data);
+});
+
+app.patch("/api/events/:id/activate", async (req, res) => {
+  const eventId = toNullableText(req.params.id);
+  if (!eventId) {
+    res.status(400).json({ error: "Event id is required." });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .update({ status: "active", starts_at: new Date().toISOString() })
+    .eq("id", eventId)
+    .select("*")
+    .maybeSingle();
+
+  if (error) {
+    res.status(500).json({ error: "Failed to activate event.", details: error.message });
+    return;
+  }
+
+  if (!data) {
+    res.status(404).json({ error: "Event not found." });
     return;
   }
 
