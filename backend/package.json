@@ -12,6 +12,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@blandsdk/client": "^1.0.1",
     "@sendgrid/mail": "^8.1.6",
     "@supabase/supabase-js": "^2.103.0",
     "cors": "^2.8.6",

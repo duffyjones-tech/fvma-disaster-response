@@ -7,10 +7,17 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
+import { useWebchat } from "@blandsdk/client/react";
 
 const API_BASE_URL = "http://localhost:3001";
 const FVMA_ORGANIZATION_ID = "02ff75f0-ad22-47df-a757-093953c3e882";
 const ACCEPTED_FILE_TYPES = ".csv,.xls,.xlsx";
+
+function buildApiError(message, details = {}) {
+  const error = new Error(message);
+  error.details = details;
+  return error;
+}
 
 async function fetchJson(url) {
   const response = await fetch(url);
@@ -29,7 +36,12 @@ async function fetchJson(url) {
     const message =
       parsed?.error ||
       (rawBody ? rawBody.slice(0, 180) : `HTTP ${response.status}`);
-    throw new Error(message);
+    throw buildApiError(message, {
+      status: response.status,
+      response: parsed,
+      rawBody,
+      url,
+    });
   }
 
   if (!isJson) {
@@ -54,7 +66,13 @@ async function postJson(url, body) {
     const message =
       parsed?.error ||
       (rawBody ? rawBody.slice(0, 180) : `HTTP ${response.status}`);
-    throw new Error(message);
+    throw buildApiError(message, {
+      status: response.status,
+      response: parsed,
+      rawBody,
+      url,
+      requestBody: body,
+    });
   }
 
   if (!isJson) {
@@ -1327,6 +1345,8 @@ function RespondPage({ token: tokenProp }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [started, setStarted] = useState(false);
+  const [voiceError, setVoiceError] = useState("");
+  const [transcript, setTranscript] = useState("");
 
   useEffect(() => {
     async function resolveToken() {
@@ -1334,6 +1354,7 @@ function RespondPage({ token: tokenProp }) {
       setError("");
       setResolved(null);
       setStarted(false);
+      setTranscript("");
 
       if (!token) {
         setIsLoading(false);
@@ -1359,6 +1380,55 @@ function RespondPage({ token: tokenProp }) {
   }, [token]);
 
   const memberName = resolved?.contact_name || "FVMA member";
+  const BLAND_WEB_AGENT_ID =
+    import.meta.env.VITE_BLAND_WEB_AGENT_ID || "";
+
+  const getWebCallToken = useCallback(async () => {
+    if (!token) {
+      throw new Error("Missing outreach token.");
+    }
+    const data = await postJson(`${API_BASE_URL}/api/voice/start-web-call`, {
+      token,
+      agent_id: BLAND_WEB_AGENT_ID,
+    });
+    if (!data?.session_token) {
+      throw new Error(data?.error || "Failed to create Bland web call session.");
+    }
+    return { token: data.session_token };
+  }, [token, BLAND_WEB_AGENT_ID]);
+
+  const {
+    state: webchatState,
+    start: startWebchat,
+    stop: stopWebchat,
+    webchat,
+  } = useWebchat({
+    agentId: BLAND_WEB_AGENT_ID,
+    getToken: getWebCallToken,
+  });
+
+  useEffect(() => {
+    const unsubscribeText = webchat.on("text", (t) => {
+      if (typeof t !== "string") return;
+      const text = t.trim();
+      if (!text) return;
+      setTranscript((cur) => (cur ? `${cur}\n${text}` : text));
+    });
+
+    const unsubscribeMessage = webchat.on("message", (m) => {
+      const who =
+        m?.payload?.type === "assistant" ? "AI" : m?.payload?.type ? "You" : "Message";
+      const msgText =
+        typeof m?.payload?.text === "string" ? m.payload.text.trim() : null;
+      if (!msgText) return;
+      setTranscript((cur) => (cur ? `${cur}\n${who}: ${msgText}` : `${who}: ${msgText}`));
+    });
+
+    return () => {
+      unsubscribeText();
+      unsubscribeMessage();
+    };
+  }, [webchat]);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -1378,7 +1448,32 @@ function RespondPage({ token: tokenProp }) {
           <div className="mt-7">
             <button
               type="button"
-              onClick={() => setStarted(true)}
+              onClick={async () => {
+                setVoiceError("");
+                setTranscript("");
+                try {
+                  if (!token) {
+                    setVoiceError("Missing outreach token.");
+                    return;
+                  }
+                  if (!BLAND_WEB_AGENT_ID) {
+                    setVoiceError(
+                      "Bland is not configured in frontend (.env): VITE_BLAND_WEB_AGENT_ID missing.",
+                    );
+                    return;
+                  }
+                  await startWebchat();
+                  setStarted(true);
+                } catch (e) {
+                  console.error("[respond] Failed to start Bland web call", {
+                    message: e?.message,
+                    details: e?.details,
+                    tokenPrefix: token ? token.slice(0, 8) : null,
+                    agentId: BLAND_WEB_AGENT_ID,
+                  });
+                  setVoiceError(e?.message || "Failed to start voice session.");
+                }
+              }}
               className="w-full rounded-md bg-teal-700 px-6 py-3 text-center text-sm font-semibold text-white hover:bg-teal-800"
               disabled={isLoading || !resolved}
             >
@@ -1386,6 +1481,9 @@ function RespondPage({ token: tokenProp }) {
             </button>
             {error ? (
               <p className="mt-3 text-sm font-medium text-rose-700">{error}</p>
+            ) : null}
+            {voiceError ? (
+              <p className="mt-3 text-sm font-medium text-rose-700">{voiceError}</p>
             ) : null}
             {token ? (
               <p className="mt-2 text-xs text-slate-500">
@@ -1395,13 +1493,37 @@ function RespondPage({ token: tokenProp }) {
           </div>
         ) : (
           <div className="mt-7 rounded-xl border border-slate-200 bg-slate-50 p-5">
-            <p className="text-sm font-semibold text-slate-900">
-              Voice Agent Placeholder
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-slate-900">
+                Voice Agent (Bland)
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  stopWebchat();
+                  setStarted(false);
+                }}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Stop
+              </button>
+            </div>
+
             <p className="mt-2 text-sm text-slate-600">
-              Bland.ai integration will go here. For now, this page confirms you
-              have the correct outreach token and are ready to start.
+              Conversation status:{" "}
+              <span className="font-medium text-slate-800">{webchatState}</span>
             </p>
+
+            <p className="mt-3 text-sm text-slate-600">
+              Speak now. Your browser may ask for microphone permission.
+            </p>
+
+            <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold text-slate-600">Transcript (placeholder)</p>
+              <pre className="mt-2 whitespace-pre-wrap text-sm text-slate-800">
+                {transcript || "Transcript will appear here as the conversation progresses."}
+              </pre>
+            </div>
           </div>
         )}
 

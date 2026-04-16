@@ -13,6 +13,10 @@ const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
 const SENDGRID_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "";
 const OUTREACH_LINK_BASE_URL = process.env.OUTREACH_LINK_BASE_URL || "";
 const DEFAULT_ORGANIZATION_ID = process.env.DEFAULT_ORGANIZATION_ID || "";
+const BLAND_API_KEY = process.env.BLAND_API_KEY || "";
+const BLAND_ENDPOINT = process.env.BLAND_ENDPOINT || "https://api.bland.ai";
+const BLAND_WEB_AGENT_ID =
+  process.env.BLAND_WEB_AGENT_ID || process.env.BLAND_AGENT_ID || "";
 const ORGANIZATION_COLUMNS = [
   "id",
   "name",
@@ -970,6 +974,186 @@ app.get("/api/outreach/resolve", async (req, res) => {
     channel: outreach.channel,
     event: event ? { id: event.id, name: event.name, status: event.status } : null,
     created_at: outreach.created_at,
+  });
+});
+
+async function blandApiRequest(pathname, options = {}) {
+  const url = `${BLAND_ENDPOINT}${pathname}`;
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        authorization: BLAND_API_KEY,
+        "content-type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
+
+    const rawText = await response.text();
+    let payload = null;
+    if (rawText) {
+      try {
+        payload = JSON.parse(rawText);
+      } catch {
+        payload = null;
+      }
+    }
+    const headers = Object.fromEntries(response.headers.entries());
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      payload,
+      rawText,
+      headers,
+      url,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      payload: null,
+      rawText: "",
+      headers: {},
+      url,
+      networkError: error?.message || String(error),
+    };
+  }
+}
+
+app.post("/api/voice/start-web-call", async (req, res) => {
+  const outreachToken = toNullableText(req.body?.token);
+  const requestedAgentId = toNullableText(req.body?.agent_id);
+  const agentId = requestedAgentId || BLAND_WEB_AGENT_ID || null;
+
+  if (!outreachToken) {
+    res.status(400).json({ error: "token is required." });
+    return;
+  }
+
+  if (!BLAND_API_KEY) {
+    res.status(500).json({
+      error: "Bland is not configured. Set BLAND_API_KEY in backend/.env.",
+    });
+    return;
+  }
+
+  const notesValue = `outreach_token:${outreachToken}`;
+  const { data: outreach, error: outreachError } = await supabase
+    .from("outreach_contacts")
+    .select("id,contact_name,phone,event_id")
+    .eq("notes", notesValue)
+    .maybeSingle();
+
+  if (outreachError) {
+    res.status(500).json({
+      error: "Failed to resolve outreach token.",
+      details: outreachError.message,
+    });
+    return;
+  }
+
+  if (!outreach) {
+    res.status(404).json({ error: "Invalid or expired outreach token." });
+    return;
+  }
+
+  if (!agentId) {
+    res.status(400).json({
+      error:
+        "Bland web call is not configured. Set BLAND_WEB_AGENT_ID (or BLAND_AGENT_ID) in backend/.env.",
+    });
+    return;
+  }
+
+  const { data: event } = await supabase
+    .from("events")
+    .select("id,name")
+    .eq("id", outreach.event_id)
+    .maybeSingle();
+
+  const blandBody = {
+    member_token: outreachToken,
+    outreach_contact_id: outreach.id,
+    event_id: outreach.event_id,
+    event_name: event?.name || null,
+    contact_name: outreach.contact_name,
+    member_name: outreach.contact_name,
+  };
+
+  console.log("[voice-start-web-call] Bland request", {
+    url: `${BLAND_ENDPOINT}/v1/agents/${agentId}/authorize`,
+    agentId,
+    outreachContactId: outreach.id,
+    tokenPrefix: outreachToken.slice(0, 8),
+    requestBody: blandBody,
+  });
+
+  const blandResponse = await blandApiRequest(`/v1/agents/${agentId}/authorize`, {
+    method: "POST",
+    body: JSON.stringify(blandBody),
+  });
+
+  if (!blandResponse.ok) {
+    console.error("[voice-start-web-call] Bland API rejected request", {
+      blandStatus: blandResponse.status,
+      blandResponse: blandResponse.payload,
+      blandRawText: blandResponse.rawText,
+      blandHeaders: blandResponse.headers,
+      blandUrl: blandResponse.url,
+      blandNetworkError: blandResponse.networkError || null,
+      agentId,
+      outreachContactId: outreach.id,
+      tokenPrefix: outreachToken.slice(0, 8),
+    });
+
+    const blandMessage =
+      blandResponse.payload?.message ||
+      blandResponse.payload?.error ||
+      blandResponse.payload?.status ||
+      "";
+    const likelyUnpublishedAgent =
+      /draft|modified|publish|unpublished/i.test(String(blandMessage));
+
+    res.status(500).json({
+      error: "Failed to start Bland call.",
+      bland_status: blandResponse.status,
+      bland_response: blandResponse.payload,
+      bland_raw_text: blandResponse.rawText,
+      bland_network_error: blandResponse.networkError || null,
+      hint: likelyUnpublishedAgent
+        ? "Your Bland agent appears not published. In Bland dashboard, open the agent and click Publish, then retry."
+        : "Check Bland agent status and ensure it is published/live. Also verify BLAND_WEB_AGENT_ID is correct.",
+    });
+    return;
+  }
+
+  const sessionToken =
+    blandResponse.payload?.token ||
+    blandResponse.payload?.session_token ||
+    blandResponse.payload?.sessionToken ||
+    null;
+
+  if (!sessionToken) {
+    res.status(500).json({
+      error: "Bland web call response did not include a session token.",
+      bland_response: blandResponse.payload,
+    });
+    return;
+  }
+
+  console.log("[voice-start-web-call] Bland web call session created", {
+    agentId,
+    sessionTokenPresent: Boolean(sessionToken),
+    outreachContactId: outreach.id,
+    memberToken: outreachToken,
+  });
+
+  res.status(201).json({
+    message: "Bland web call session created.",
+    session_token: sessionToken,
+    agent_id: agentId,
+    bland_response: blandResponse.payload,
   });
 });
 
