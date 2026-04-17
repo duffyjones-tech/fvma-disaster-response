@@ -140,6 +140,103 @@ function buildOutreachLink(token) {
   return `${base}?token=${encodeURIComponent(token)}`;
 }
 
+function normalizePhoneDigits(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const digits = String(value).replace(/\D/g, "");
+  if (!digits) {
+    return null;
+  }
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+
+function memberMatchesOutreachContact(member, outreachRow) {
+  const mEmail = member.email?.trim().toLowerCase();
+  const oEmail = outreachRow.email?.trim().toLowerCase();
+  if (mEmail && oEmail && mEmail === oEmail) {
+    return true;
+  }
+  const mPhone = normalizePhoneDigits(member.phone);
+  const oPhone = normalizePhoneDigits(outreachRow.phone);
+  return Boolean(mPhone && oPhone && mPhone === oPhone);
+}
+
+function formatOutreachChannelsForMember(member, outreachRows) {
+  const matched = outreachRows.filter((row) => memberMatchesOutreachContact(member, row));
+  const channels = [
+    ...new Set(
+      matched
+        .map((row) => String(row.channel || "").trim().toLowerCase())
+        .filter((c) => c === "email" || c === "sms"),
+    ),
+  ].sort();
+  if (!channels.length) {
+    return null;
+  }
+  return channels.map((c) => (c === "email" ? "Email" : "SMS")).join(", ");
+}
+
+function formatReportChannelLabel(channel) {
+  const c = String(channel || "")
+    .trim()
+    .toLowerCase();
+  if (c === "email") {
+    return "Email";
+  }
+  if (c === "sms") {
+    return "SMS";
+  }
+  if (c === "voice") {
+    return "Voice";
+  }
+  if (c === "web") {
+    return "Web";
+  }
+  return channel ? String(channel) : null;
+}
+
+async function findMemberForOutreachContact(outreach, organizationId) {
+  const email = outreach.email?.trim();
+  if (email) {
+    const { data, error } = await supabase
+      .from("members")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .ilike("email", email)
+      .maybeSingle();
+    if (!error && data) {
+      return data;
+    }
+  }
+
+  const targetDigits = normalizePhoneDigits(outreach.phone);
+  if (!targetDigits) {
+    return null;
+  }
+
+  const { data: candidates, error: listError } = await supabase
+    .from("members")
+    .select("*")
+    .eq("organization_id", organizationId);
+
+  if (listError || !candidates?.length) {
+    return null;
+  }
+
+  return candidates.find((m) => normalizePhoneDigits(m.phone) === targetDigits) || null;
+}
+
+function sanitizeSurveyAnswers(raw) {
+  const out = {};
+  for (let i = 1; i <= 8; i += 1) {
+    const key = `q${i}`;
+    const v = raw?.[key];
+    out[key] = v === undefined || v === null ? "" : String(v);
+  }
+  return out;
+}
+
 function buildMemberRow(inputRow, organizationIdFromRequest) {
   const row = normalizeRowKeys(inputRow);
   const fullNameDirect = firstPopulatedValue(row, [
@@ -306,6 +403,222 @@ app.get("/api/events/:id/outreach-history", async (req, res) => {
   }));
 
   res.json({ count: records.length, records });
+});
+
+app.get("/api/events/:id/member-report", async (req, res) => {
+  const eventId = toNullableText(req.params.id);
+  const organizationId = toNullableText(req.query.organization_id);
+
+  if (!eventId) {
+    res.status(400).json({ error: "Event id is required." });
+    return;
+  }
+
+  if (!organizationId) {
+    res.status(400).json({ error: "organization_id query parameter is required." });
+    return;
+  }
+
+  const { data: organization, error: organizationError } = await supabase
+    .from("organizations")
+    .select("id")
+    .eq("id", organizationId)
+    .maybeSingle();
+
+  if (organizationError) {
+    res.status(500).json({
+      error: "Failed validating organization_id.",
+      details: organizationError.message,
+    });
+    return;
+  }
+
+  if (!organization) {
+    res.status(404).json({ error: "Organization not found." });
+    return;
+  }
+
+  const { data: event, error: eventError } = await supabase
+    .from("events")
+    .select("*")
+    .eq("id", eventId)
+    .maybeSingle();
+
+  if (eventError) {
+    res.status(500).json({ error: "Failed to fetch event.", details: eventError.message });
+    return;
+  }
+
+  if (!event) {
+    res.status(404).json({ error: "Event not found." });
+    return;
+  }
+
+  const { data: membersRaw, error: membersError } = await supabase
+    .from("members")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .eq("is_active", true)
+    .order("full_name", { ascending: true });
+
+  if (membersError) {
+    res.status(500).json({
+      error: "Failed to fetch members.",
+      details: membersError.message,
+    });
+    return;
+  }
+
+  const { data: outreachRaw, error: outreachError } = await supabase
+    .from("outreach_contacts")
+    .select("id,email,phone,channel,created_at")
+    .eq("event_id", eventId)
+    .eq("organization_id", organizationId);
+
+  if (outreachError) {
+    res.status(500).json({
+      error: "Failed to fetch outreach contacts.",
+      details: outreachError.message,
+    });
+    return;
+  }
+
+  const { data: responsesRaw, error: responsesError } = await supabase
+    .from("event_member_responses")
+    .select("*")
+    .eq("event_id", eventId)
+    .eq("organization_id", organizationId);
+
+  if (responsesError) {
+    res.status(500).json({
+      error: "Failed to fetch response records.",
+      details: responsesError.message,
+      hint:
+        responsesError.message?.includes("event_member_responses") ||
+        responsesError.code === "42P01"
+          ? "Apply the SQL migration supabase/migrations/20260417120000_event_member_responses.sql in Supabase."
+          : undefined,
+    });
+    return;
+  }
+
+  const outreachRows = outreachRaw || [];
+  const responseByMember = new Map((responsesRaw || []).map((row) => [row.member_id, row]));
+
+  const rows = (membersRaw || []).map((member) => {
+    const record = responseByMember.get(member.id);
+    const status = record ? record.status : "no_response";
+    let channelContacted = formatOutreachChannelsForMember(member, outreachRows);
+    if (!channelContacted && record?.channel) {
+      channelContacted = formatReportChannelLabel(record.channel);
+    }
+    return {
+      member: {
+        id: member.id,
+        full_name: member.full_name,
+        email: member.email,
+        phone: member.phone,
+        role: member.role,
+      },
+      status,
+      channel_contacted: channelContacted,
+      date_responded: record?.responded_at || null,
+      answers: sanitizeSurveyAnswers(record?.answers || {}),
+    };
+  });
+
+  res.json({
+    event,
+    organization_id: organizationId,
+    count: rows.length,
+    rows,
+  });
+});
+
+app.post("/api/outreach/submit-response", async (req, res) => {
+  const token = toNullableText(req.body?.token);
+  const status = toNullableText(req.body?.status)?.toLowerCase();
+  const channelInput = toNullableText(req.body?.channel)?.toLowerCase() || "web";
+  const answers = sanitizeSurveyAnswers(req.body?.answers || {});
+
+  if (!token) {
+    res.status(400).json({ error: "token is required." });
+    return;
+  }
+
+  if (status !== "safe" && status !== "needs_help") {
+    res.status(400).json({ error: "status must be safe or needs_help." });
+    return;
+  }
+
+  const allowedChannels = new Set(["email", "sms", "voice", "web"]);
+  if (!allowedChannels.has(channelInput)) {
+    res.status(400).json({ error: "channel must be email, sms, voice, or web." });
+    return;
+  }
+
+  const notesValue = `outreach_token:${token}`;
+  const { data: outreach, error: outreachError } = await supabase
+    .from("outreach_contacts")
+    .select("id,event_id,organization_id,email,phone")
+    .eq("notes", notesValue)
+    .maybeSingle();
+
+  if (outreachError) {
+    res.status(500).json({
+      error: "Failed to resolve outreach token.",
+      details: outreachError.message,
+    });
+    return;
+  }
+
+  if (!outreach) {
+    res.status(404).json({ error: "Invalid or unknown outreach token." });
+    return;
+  }
+
+  const member = await findMemberForOutreachContact(outreach, outreach.organization_id);
+  if (!member) {
+    res.status(404).json({
+      error: "Could not match this outreach record to a member (email/phone).",
+    });
+    return;
+  }
+
+  const respondedAt = new Date().toISOString();
+  const row = {
+    organization_id: outreach.organization_id,
+    event_id: outreach.event_id,
+    member_id: member.id,
+    status,
+    channel: channelInput,
+    responded_at: respondedAt,
+    answers,
+    updated_at: respondedAt,
+  };
+
+  const { data: saved, error: saveError } = await supabase
+    .from("event_member_responses")
+    .upsert(row, { onConflict: "event_id,member_id" })
+    .select("*")
+    .maybeSingle();
+
+  if (saveError) {
+    res.status(500).json({
+      error: "Failed to save response.",
+      details: saveError.message,
+      hint:
+        saveError.message?.includes("event_member_responses") || saveError.code === "42P01"
+          ? "Apply the SQL migration supabase/migrations/20260417120000_event_member_responses.sql in Supabase."
+          : undefined,
+    });
+    return;
+  }
+
+  res.status(201).json({
+    message: "Response recorded.",
+    record: saved,
+  });
 });
 
 app.post("/api/events", async (req, res) => {
