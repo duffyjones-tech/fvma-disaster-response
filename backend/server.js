@@ -2,10 +2,15 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import XLSX from "xlsx";
-import { extname } from "node:path";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import sendgridMail from "@sendgrid/mail";
 import { supabase } from "./supabaseClient.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -48,7 +53,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
   fileFilter: (_req, file, cb) => {
-    const fileExt = extname(file.originalname || "").toLowerCase();
+    const fileExt = path.extname(file.originalname || "").toLowerCase();
     if (!ALLOWED_FILE_EXTENSIONS.has(fileExt)) {
       cb(new Error("Only .csv, .xls, and .xlsx files are supported."));
       return;
@@ -1522,6 +1527,27 @@ app.get("/api/members", async (req, res) => {
   });
 });
 
+const frontendDistPath = path.join(__dirname, "..", "frontend", "dist");
+if (fs.existsSync(frontendDistPath)) {
+  app.use(
+    express.static(frontendDistPath, {
+      index: false,
+      fallthrough: true,
+    }),
+  );
+  app.use((req, res, next) => {
+    if (req.method !== "GET" || req.path.startsWith("/api")) {
+      next();
+      return;
+    }
+    res.sendFile(path.join(frontendDistPath, "index.html"), (err) => {
+      if (err) {
+        next(err);
+      }
+    });
+  });
+}
+
 app.use((err, _req, res, _next) => {
   if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
     res.status(400).json({ error: "File too large. Max allowed size is 10MB." });
@@ -1540,5 +1566,5 @@ app.use((err, _req, res, _next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`API server listening on http://localhost:${PORT}`);
+  console.log(`Server listening on port ${PORT}`);
 });

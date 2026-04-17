@@ -9,8 +9,21 @@ import {
 } from "react-router-dom";
 import { useWebchat } from "@blandsdk/client/react";
 
-const API_BASE_URL = "http://localhost:3001";
-const FVMA_ORGANIZATION_ID = "02ff75f0-ad22-47df-a757-093953c3e882";
+/**
+ * API origin for fetch calls. Empty string = same origin (production: Express serves the SPA).
+ * For local dev, set `VITE_API_BASE_URL` in `frontend/.env.local` (e.g. http://localhost:3001).
+ */
+function getEnvApiBase() {
+  const raw = import.meta.env.VITE_API_BASE_URL;
+  if (raw === undefined || raw === null) {
+    return "";
+  }
+  const t = String(raw).trim();
+  return t === "" ? "" : t.replace(/\/$/, "");
+}
+
+const API_BASE_URL = getEnvApiBase();
+const ORGANIZATION_ID = import.meta.env.VITE_ORGANIZATION_ID ?? "";
 const ACCEPTED_FILE_TYPES = ".csv,.xls,.xlsx";
 
 /** Labels for the eight check-in questions (stored as q1–q8 in API). */
@@ -459,7 +472,7 @@ function MemberUploadPanel({ onImportComplete }) {
       setIsCheckingExisting(true);
       try {
         const result = await postJson(`${API_BASE_URL}/api/members/existing-emails`, {
-          organization_id: FVMA_ORGANIZATION_ID,
+          organization_id: ORGANIZATION_ID,
           emails,
         });
         setExistingEmails(new Set(result.existing_emails || []));
@@ -500,7 +513,7 @@ function MemberUploadPanel({ onImportComplete }) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          organization_id: FVMA_ORGANIZATION_ID,
+          organization_id: ORGANIZATION_ID,
           members: membersToImport,
         }),
       });
@@ -710,9 +723,9 @@ function DashboardPage() {
 
     try {
       const [orgData, membersData] = await Promise.all([
-        fetchJson(`${API_BASE_URL}/api/organizations/${FVMA_ORGANIZATION_ID}`),
+        fetchJson(`${API_BASE_URL}/api/organizations/${ORGANIZATION_ID}`),
         fetchJson(
-          `${API_BASE_URL}/api/members?organization_id=${FVMA_ORGANIZATION_ID}`,
+          `${API_BASE_URL}/api/members?organization_id=${ORGANIZATION_ID}`,
         ),
       ]);
 
@@ -753,7 +766,17 @@ function DashboardPage() {
           <p className="font-medium">Could not load dashboard.</p>
           <p className="mt-1 text-sm">{error}</p>
           <p className="mt-3 text-sm">
-            Make sure the backend is running on <code>http://localhost:3001</code>.
+            {API_BASE_URL ? (
+              <>
+                Make sure the API is reachable at{" "}
+                <code className="rounded bg-slate-100 px-1">{API_BASE_URL}</code>.
+              </>
+            ) : (
+              <>
+                Make sure this app&apos;s server is running (same host serves the API in
+                production).
+              </>
+            )}
           </p>
         </div>
       </main>
@@ -875,7 +898,7 @@ function MembersPage() {
 
     try {
       const membersData = await fetchJson(
-        `${API_BASE_URL}/api/members?organization_id=${FVMA_ORGANIZATION_ID}`,
+        `${API_BASE_URL}/api/members?organization_id=${ORGANIZATION_ID}`,
       );
       setMembers(membersData.members || []);
     } catch (err) {
@@ -1128,10 +1151,10 @@ function OutreachLauncherPage() {
       const [eventData, membersData, historyData] = await Promise.all([
         fetchJson(`${API_BASE_URL}/api/events/${eventId}`),
         fetchJson(
-          `${API_BASE_URL}/api/members?organization_id=${FVMA_ORGANIZATION_ID}`,
+          `${API_BASE_URL}/api/members?organization_id=${ORGANIZATION_ID}`,
         ),
         fetchJson(
-          `${API_BASE_URL}/api/events/${eventId}/outreach-history?organization_id=${FVMA_ORGANIZATION_ID}`,
+          `${API_BASE_URL}/api/events/${eventId}/outreach-history?organization_id=${ORGANIZATION_ID}`,
         ),
       ]);
 
@@ -1173,7 +1196,7 @@ function OutreachLauncherPage() {
 
     try {
       const result = await postJson(`${API_BASE_URL}/api/events/${eventId}/outreach-launch`, {
-        organization_id: FVMA_ORGANIZATION_ID,
+        organization_id: ORGANIZATION_ID,
         channels,
       });
 
@@ -1417,7 +1440,7 @@ function ReportsPage() {
       setError("");
       try {
         const data = await fetchJson(
-          `${API_BASE_URL}/api/events/${activeEvent.id}/member-report?organization_id=${FVMA_ORGANIZATION_ID}`,
+          `${API_BASE_URL}/api/events/${activeEvent.id}/member-report?organization_id=${ORGANIZATION_ID}`,
         );
         if (!cancelled) {
           setReportPayload(data);
@@ -1951,6 +1974,13 @@ function App() {
           <Navigation />
         </div>
       </header>
+      {!ORGANIZATION_ID ? (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm text-amber-900">
+          Set <code className="rounded bg-amber-100 px-1">VITE_ORGANIZATION_ID</code> when
+          building the app (see <code className="rounded bg-amber-100 px-1">frontend/.env.example</code>
+          ).
+        </div>
+      ) : null}
       <Routes>
         <Route path="/" element={<RootWithToken />} />
         <Route path="/members" element={<MembersPage />} />
