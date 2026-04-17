@@ -34,6 +34,15 @@ const BLAND_API_KEY = process.env.BLAND_API_KEY || "";
 const BLAND_ENDPOINT = process.env.BLAND_ENDPOINT || "https://api.bland.ai";
 const BLAND_WEB_AGENT_ID =
   process.env.BLAND_WEB_AGENT_ID || process.env.BLAND_AGENT_ID || "";
+const OUTREACH_EMAIL_TECH_FOOTER_TEXT =
+  "Disaster Response Technology provided by dvmSuccess | dvm.com | vettelligence.ai | dvm.me";
+const OUTREACH_EMAIL_TECH_FOOTER_HTML = `
+  <p style="margin-top:24px;padding-top:16px;border-top:1px solid #cbd5e1;font-size:13px;color:#334155;line-height:1.5;">
+    Disaster Response Technology provided by dvmSuccess |
+    <a href="https://dvm.com" style="color:#1A3A5C;">dvm.com</a> |
+    <a href="https://vettelligence.ai" style="color:#1A3A5C;">vettelligence.ai</a> |
+    <a href="https://dvm.me" style="color:#1A3A5C;">dvm.me</a>
+  </p>`;
 const ORGANIZATION_COLUMNS = [
   "id",
   "name",
@@ -885,6 +894,8 @@ app.post("/api/events/:id/outreach-launch", async (req, res) => {
         "",
         "Thank you,",
         "FVMA Disaster Response",
+        "",
+        OUTREACH_EMAIL_TECH_FOOTER_TEXT,
       ].join("\n"),
       html: `
         <p>Hello ${entry.contact_name},</p>
@@ -897,6 +908,7 @@ app.post("/api/events/:id/outreach-launch", async (req, res) => {
           }
         </p>
         <p>Thank you,<br/>FVMA Disaster Response</p>
+        ${OUTREACH_EMAIL_TECH_FOOTER_HTML}
       `,
     }));
 
