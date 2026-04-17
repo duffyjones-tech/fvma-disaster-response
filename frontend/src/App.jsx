@@ -1935,6 +1935,43 @@ function RootWithToken() {
   return <DashboardPage />;
 }
 
+function SiteFooter() {
+  const linkClass =
+    "text-white/95 underline-offset-2 transition hover:text-white hover:underline";
+  return (
+    <footer
+      className="border-t border-black/10 bg-[#1A3A5C] px-4 py-3 text-center text-sm text-white/90"
+      role="contentinfo"
+    >
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-3 gap-y-1">
+        <span>Disaster Response Technology provided by dvmSuccess</span>
+        <span className="hidden text-white/35 sm:inline" aria-hidden>
+          |
+        </span>
+        <nav
+          className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1"
+          aria-label="dvmSuccess links"
+        >
+          <a href="https://dvm.com" className={linkClass} target="_blank" rel="noopener noreferrer">
+            dvm.com
+          </a>
+          <a
+            href="https://vettelligence.ai"
+            className={linkClass}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            vettelligence.ai
+          </a>
+          <a href="https://dvm.me" className={linkClass} target="_blank" rel="noopener noreferrer">
+            dvm.me
+          </a>
+        </nav>
+      </div>
+    </footer>
+  );
+}
+
 function Navigation() {
   const linkClass = ({ isActive }) =>
     `rounded-md px-3 py-2 text-sm font-medium ${
@@ -1961,7 +1998,7 @@ function Navigation() {
 
 function App() {
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
+    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
           <div className="space-y-0.5">
@@ -1982,14 +2019,17 @@ function App() {
           ).
         </div>
       ) : null}
-      <Routes>
-        <Route path="/" element={<RootWithToken />} />
-        <Route path="/members" element={<MembersPage />} />
-        <Route path="/events" element={<EventsPage />} />
-        <Route path="/events/:eventId/outreach" element={<OutreachLauncherPage />} />
-        <Route path="/respond" element={<RespondPage />} />
-        <Route path="/reports" element={<ReportsPage />} />
-      </Routes>
+      <div className="flex flex-1 flex-col">
+        <Routes>
+          <Route path="/" element={<RootWithToken />} />
+          <Route path="/members" element={<MembersPage />} />
+          <Route path="/events" element={<EventsPage />} />
+          <Route path="/events/:eventId/outreach" element={<OutreachLauncherPage />} />
+          <Route path="/respond" element={<RespondPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
+        </Routes>
+      </div>
+      <SiteFooter />
     </div>
   );
 }
