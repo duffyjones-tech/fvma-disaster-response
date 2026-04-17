@@ -313,7 +313,13 @@ function buildMemberRow(inputRow, organizationIdFromRequest) {
 }
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, service: "fvma-disaster-response-api" });
+  res.json({
+    ok: true,
+    service: "fvma-disaster-response-api",
+    supabase_env_configured: Boolean(
+      process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY,
+    ),
+  });
 });
 
 app.get("/api/organizations/:id", async (req, res) => {
