@@ -13,7 +13,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+
+/** Railway injects PORT; local dev should set PORT in backend/.env (e.g. 3001). */
+const rawPort = process.env.PORT;
+if (rawPort === undefined || String(rawPort).trim() === "") {
+  throw new Error(
+    "PORT is not set. Railway sets this automatically; for local development add PORT=3001 to backend/.env.",
+  );
+}
+const listenPort = Number(String(rawPort).trim());
+if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
+  throw new Error(`Invalid PORT environment value: ${rawPort}`);
+}
+
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
 const SENDGRID_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "";
 const OUTREACH_LINK_BASE_URL = process.env.OUTREACH_LINK_BASE_URL || "";
@@ -1565,6 +1577,6 @@ app.use((err, _req, res, _next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+app.listen(listenPort, "0.0.0.0", () => {
+  console.log(`Server listening on 0.0.0.0:${listenPort} (PORT=${rawPort})`);
 });
