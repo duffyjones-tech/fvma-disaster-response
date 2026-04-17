@@ -10,8 +10,9 @@ import {
 import { useWebchat } from "@blandsdk/client/react";
 
 /**
- * API origin for fetch calls. Empty string = same origin (production: Express serves the SPA).
- * For local dev, set `VITE_API_BASE_URL` in `frontend/.env.local` (e.g. http://localhost:3001).
+ * API origin for fetch calls. Empty string = same origin (only if the SPA is served by the API).
+ * Local dev: `frontend/.env.local` → e.g. http://localhost:3001
+ * Production build: `frontend/.env.production` → Railway API URL (see repo).
  */
 function getEnvApiBase() {
   const raw = import.meta.env.VITE_API_BASE_URL;
