@@ -1,0 +1,13 @@
+{
+  "name": "fvma-disaster-response",
+  "private": true,
+  "version": "1.0.0",
+  "description": "FVMA Disaster Response Platform (monorepo root for deployment)",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "npm install --prefix backend && npm install --prefix frontend && npm run build --prefix frontend",
+    "start": "node backend/server.js"
+  }
+}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Link,
   NavLink,
@@ -9,9 +9,81 @@ import {
 } from "react-router-dom";
 import { useWebchat } from "@blandsdk/client/react";
 
-const API_BASE_URL = "http://localhost:3001";
-const FVMA_ORGANIZATION_ID = "02ff75f0-ad22-47df-a757-093953c3e882";
+/**
+ * API origin for fetch calls. Empty string = same origin (only if the SPA is served by the API).
+ * Local dev: `frontend/.env.local` → e.g. http://localhost:3001
+ * Production build: `frontend/.env.production` → Railway API URL (see repo).
+ */
+function getEnvApiBase() {
+  const raw = import.meta.env.VITE_API_BASE_URL;
+  if (raw === undefined || raw === null) {
+    return "";
+  }
+  const t = String(raw).trim();
+  return t === "" ? "" : t.replace(/\/$/, "");
+}
+
+const API_BASE_URL = getEnvApiBase();
+const ORGANIZATION_ID = import.meta.env.VITE_ORGANIZATION_ID ?? "";
 const ACCEPTED_FILE_TYPES = ".csv,.xls,.xlsx";
+
+/** Labels for the eight check-in questions (stored as q1–q8 in API). */
+const REPORT_QUESTION_LABELS = [
+  "Are you and your household safe at this time?",
+  "Is your practice or workplace operational?",
+  "Do you need emergency assistance (medical, safety, or supplies)?",
+  "Are you available to assist with animal response in the next 48 hours?",
+  "What city or county are you currently located in?",
+  "Do you have adequate veterinary supplies and medications on hand?",
+  "Best alternate contact (phone or email) if we cannot reach you?",
+  "Additional notes for coordinators?",
+];
+
+function statusLabel(status) {
+  if (status === "safe") {
+    return "Safe";
+  }
+  if (status === "needs_help") {
+    return "Needs Help";
+  }
+  return "No Response";
+}
+
+function escapeCsvCell(value) {
+  const s = value === null || value === undefined ? "" : String(value);
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function buildReportCsv(rows) {
+  const headers = [
+    "Name",
+    "Status",
+    "Channel contacted",
+    "Date responded",
+    ...REPORT_QUESTION_LABELS.map((_, i) => `Question ${i + 1}`),
+  ];
+  const lines = [headers.map(escapeCsvCell).join(",")];
+  for (const row of rows) {
+    const answerCells = REPORT_QUESTION_LABELS.map((_, i) =>
+      escapeCsvCell(row.answers?.[`q${i + 1}`] ?? ""),
+    );
+    lines.push(
+      [
+        escapeCsvCell(row.member?.full_name),
+        escapeCsvCell(statusLabel(row.status)),
+        escapeCsvCell(row.channel_contacted || ""),
+        escapeCsvCell(
+          row.date_responded ? new Date(row.date_responded).toLocaleString() : "",
+        ),
+        ...answerCells,
+      ].join(","),
+    );
+  }
+  return `\uFEFF${lines.join("\r\n")}`;
+}
 
 function buildApiError(message, details = {}) {
   const error = new Error(message);
@@ -401,7 +473,7 @@ function MemberUploadPanel({ onImportComplete }) {
       setIsCheckingExisting(true);
       try {
         const result = await postJson(`${API_BASE_URL}/api/members/existing-emails`, {
-          organization_id: FVMA_ORGANIZATION_ID,
+          organization_id: ORGANIZATION_ID,
           emails,
         });
         setExistingEmails(new Set(result.existing_emails || []));
@@ -442,7 +514,7 @@ function MemberUploadPanel({ onImportComplete }) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          organization_id: FVMA_ORGANIZATION_ID,
+          organization_id: ORGANIZATION_ID,
           members: membersToImport,
         }),
       });
@@ -652,9 +724,9 @@ function DashboardPage() {
 
     try {
       const [orgData, membersData] = await Promise.all([
-        fetchJson(`${API_BASE_URL}/api/organizations/${FVMA_ORGANIZATION_ID}`),
+        fetchJson(`${API_BASE_URL}/api/organizations/${ORGANIZATION_ID}`),
         fetchJson(
-          `${API_BASE_URL}/api/members?organization_id=${FVMA_ORGANIZATION_ID}`,
+          `${API_BASE_URL}/api/members?organization_id=${ORGANIZATION_ID}`,
         ),
       ]);
 
@@ -695,7 +767,17 @@ function DashboardPage() {
           <p className="font-medium">Could not load dashboard.</p>
           <p className="mt-1 text-sm">{error}</p>
           <p className="mt-3 text-sm">
-            Make sure the backend is running on <code>http://localhost:3001</code>.
+            {API_BASE_URL ? (
+              <>
+                Make sure the API is reachable at{" "}
+                <code className="rounded bg-slate-100 px-1">{API_BASE_URL}</code>.
+              </>
+            ) : (
+              <>
+                Make sure this app&apos;s server is running (same host serves the API in
+                production).
+              </>
+            )}
           </p>
         </div>
       </main>
@@ -817,7 +899,7 @@ function MembersPage() {
 
     try {
       const membersData = await fetchJson(
-        `${API_BASE_URL}/api/members?organization_id=${FVMA_ORGANIZATION_ID}`,
+        `${API_BASE_URL}/api/members?organization_id=${ORGANIZATION_ID}`,
       );
       setMembers(membersData.members || []);
     } catch (err) {
@@ -1070,10 +1152,10 @@ function OutreachLauncherPage() {
       const [eventData, membersData, historyData] = await Promise.all([
         fetchJson(`${API_BASE_URL}/api/events/${eventId}`),
         fetchJson(
-          `${API_BASE_URL}/api/members?organization_id=${FVMA_ORGANIZATION_ID}`,
+          `${API_BASE_URL}/api/members?organization_id=${ORGANIZATION_ID}`,
         ),
         fetchJson(
-          `${API_BASE_URL}/api/events/${eventId}/outreach-history?organization_id=${FVMA_ORGANIZATION_ID}`,
+          `${API_BASE_URL}/api/events/${eventId}/outreach-history?organization_id=${ORGANIZATION_ID}`,
         ),
       ]);
 
@@ -1115,7 +1197,7 @@ function OutreachLauncherPage() {
 
     try {
       const result = await postJson(`${API_BASE_URL}/api/events/${eventId}/outreach-launch`, {
-        organization_id: FVMA_ORGANIZATION_ID,
+        organization_id: ORGANIZATION_ID,
         channels,
       });
 
@@ -1309,14 +1391,323 @@ function OutreachLauncherPage() {
 }
 
 function ReportsPage() {
+  const [events, setEvents] = useState([]);
+  const [reportPayload, setReportPayload] = useState(null);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [isLoadingEvents, setIsLoadingEvents] = useState(true);
+  const [isLoadingReport, setIsLoadingReport] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadEvents() {
+      setIsLoadingEvents(true);
+      setError("");
+      try {
+        const data = await fetchJson(`${API_BASE_URL}/api/events`);
+        if (!cancelled) {
+          setEvents(data.events || []);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message || "Failed to load events.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingEvents(false);
+        }
+      }
+    }
+    loadEvents();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const activeEvent = useMemo(
+    () => (events || []).find((e) => e.status === "active") || null,
+    [events],
+  );
+
+  useEffect(() => {
+    if (!activeEvent?.id) {
+      setReportPayload(null);
+      return;
+    }
+    let cancelled = false;
+    async function loadReport() {
+      setIsLoadingReport(true);
+      setError("");
+      try {
+        const data = await fetchJson(
+          `${API_BASE_URL}/api/events/${activeEvent.id}/member-report?organization_id=${ORGANIZATION_ID}`,
+        );
+        if (!cancelled) {
+          setReportPayload(data);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setReportPayload(null);
+          setError(err.message || "Failed to load report.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingReport(false);
+        }
+      }
+    }
+    loadReport();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeEvent?.id]);
+
+  const filteredRows = useMemo(() => {
+    const rows = reportPayload?.rows || [];
+    if (statusFilter === "all") {
+      return rows;
+    }
+    return rows.filter((r) => r.status === statusFilter);
+  }, [reportPayload, statusFilter]);
+
+  const toggleExpanded = useCallback((memberId) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(memberId)) {
+        next.delete(memberId);
+      } else {
+        next.add(memberId);
+      }
+      return next;
+    });
+  }, []);
+
+  const exportCsv = useCallback(() => {
+    const csv = buildReportCsv(filteredRows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safeName = (activeEvent?.name || "event")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "-")
+      .slice(0, 60);
+    a.href = url;
+    a.download = `fvma-report-${safeName}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filteredRows, activeEvent?.name]);
+
+  const filterBtn = (id, label) => (
+    <button
+      key={id}
+      type="button"
+      onClick={() => setStatusFilter(id)}
+      className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+        statusFilter === id
+          ? "bg-teal-700 text-white"
+          : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
-    <main className="mx-auto max-w-6xl px-4 py-10">
+    <main className="mx-auto max-w-6xl space-y-6 px-4 py-8">
       <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Reports</h2>
-        <p className="mt-2 text-sm text-slate-600">
-          Coming soon: exportable reports for outreach, responses, and staffing.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">
+              Reports
+            </p>
+            <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+              Member check-ins
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Response summary for the{" "}
+              <span className="font-medium text-slate-800">active</span> disaster event.
+            </p>
+          </div>
+          <Link
+            to="/events"
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Events
+          </Link>
+        </div>
+
+        {isLoadingEvents ? (
+          <p className="mt-4 text-sm text-slate-600">Loading events…</p>
+        ) : !activeEvent ? (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            There is no active event. Activate an event on the Events page to view reports.
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-slate-600">
+            Active event:{" "}
+            <span className="font-semibold text-slate-900">{activeEvent.name}</span>
+          </p>
+        )}
       </section>
+
+      {activeEvent ? (
+        <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">Responses</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                {reportPayload?.count ?? "—"} active member
+                {reportPayload?.count === 1 ? "" : "s"} for this event.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {filterBtn("all", "All")}
+              {filterBtn("safe", "Safe")}
+              {filterBtn("needs_help", "Needs Help")}
+              {filterBtn("no_response", "No Response")}
+              <button
+                type="button"
+                onClick={exportCsv}
+                disabled={isLoadingReport || !filteredRows.length}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Export to CSV
+              </button>
+            </div>
+          </div>
+
+          {isLoadingReport ? (
+            <div className="px-6 py-10 text-sm text-slate-600">Loading report…</div>
+          ) : error ? (
+            <div className="px-6 py-10">
+              <p className="text-sm font-medium text-rose-700">{error}</p>
+              <p className="mt-2 text-sm text-slate-600">
+                If the error mentions{" "}
+                <code className="rounded bg-slate-100 px-1">event_member_responses</code>, run
+                the SQL migration in{" "}
+                <code className="rounded bg-slate-100 px-1">
+                  supabase/migrations/20260417120000_event_member_responses.sql
+                </code>{" "}
+                in the Supabase SQL editor.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="w-10 px-4 py-3 font-semibold text-slate-700" aria-label="Expand" />
+                    <th className="px-6 py-3 font-semibold text-slate-700">Name</th>
+                    <th className="px-6 py-3 font-semibold text-slate-700">Status</th>
+                    <th className="px-6 py-3 font-semibold text-slate-700">
+                      Channel contacted
+                    </th>
+                    <th className="px-6 py-3 font-semibold text-slate-700">
+                      Date responded
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filteredRows.map((row) => {
+                    const isOpen = expanded.has(row.member.id);
+                    const status = row.status;
+                    const statusClass =
+                      status === "safe"
+                        ? "bg-emerald-100 text-emerald-800"
+                        : status === "needs_help"
+                          ? "bg-rose-100 text-rose-800"
+                          : "bg-amber-100 text-amber-800";
+                    return (
+                      <Fragment key={row.member.id}>
+                        <tr className="hover:bg-slate-50">
+                          <td className="px-4 py-3 align-top">
+                            <button
+                              type="button"
+                              onClick={() => toggleExpanded(row.member.id)}
+                              className="rounded p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-800"
+                              aria-expanded={isOpen}
+                              aria-label={isOpen ? "Collapse answers" : "Expand answers"}
+                            >
+                              {isOpen ? "▼" : "▶"}
+                            </button>
+                          </td>
+                          <td className="px-6 py-3 font-medium text-slate-900">
+                            <button
+                              type="button"
+                              onClick={() => toggleExpanded(row.member.id)}
+                              className="text-left hover:underline"
+                            >
+                              {row.member.full_name}
+                            </button>
+                          </td>
+                          <td className="px-6 py-3">
+                            <span
+                              className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${statusClass}`}
+                            >
+                              {statusLabel(status)}
+                            </span>
+                          </td>
+                          <td className="px-6 py-3 text-slate-700">
+                            {row.channel_contacted || "—"}
+                          </td>
+                          <td className="px-6 py-3 text-slate-700">
+                            {row.date_responded
+                              ? new Date(row.date_responded).toLocaleString()
+                              : "—"}
+                          </td>
+                        </tr>
+                        {isOpen ? (
+                          <tr className="bg-slate-50">
+                            <td colSpan={5} className="px-6 pb-5 pt-0">
+                              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                  Check-in answers
+                                </p>
+                                <dl className="mt-3 space-y-3">
+                                  {REPORT_QUESTION_LABELS.map((label, i) => {
+                                    const key = `q${i + 1}`;
+                                    const val = row.answers?.[key];
+                                    const display =
+                                      val !== undefined && val !== null && String(val).trim() !== ""
+                                        ? String(val)
+                                        : "—";
+                                    return (
+                                      <div key={key}>
+                                        <dt className="text-sm font-medium text-slate-800">
+                                          {i + 1}. {label}
+                                        </dt>
+                                        <dd className="mt-0.5 text-sm text-slate-600 whitespace-pre-wrap">
+                                          {display}
+                                        </dd>
+                                      </div>
+                                    );
+                                  })}
+                                </dl>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
+                  {!filteredRows.length ? (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="px-6 py-10 text-center text-slate-500"
+                      >
+                        No members match this filter.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ) : null}
     </main>
   );
 }
@@ -1544,6 +1935,43 @@ function RootWithToken() {
   return <DashboardPage />;
 }
 
+function SiteFooter() {
+  const linkClass =
+    "text-white/95 underline-offset-2 transition hover:text-white hover:underline";
+  return (
+    <footer
+      className="border-t border-black/10 bg-[#1A3A5C] px-4 py-3 text-center text-sm text-white/90"
+      role="contentinfo"
+    >
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-3 gap-y-1">
+        <span>Disaster Response Technology provided by dvmSuccess</span>
+        <span className="hidden text-white/35 sm:inline" aria-hidden>
+          |
+        </span>
+        <nav
+          className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1"
+          aria-label="dvmSuccess links"
+        >
+          <a href="https://dvm.com" className={linkClass} target="_blank" rel="noopener noreferrer">
+            dvm.com
+          </a>
+          <a
+            href="https://vettelligence.ai"
+            className={linkClass}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            vettelligence.ai
+          </a>
+          <a href="https://dvm.me" className={linkClass} target="_blank" rel="noopener noreferrer">
+            dvm.me
+          </a>
+        </nav>
+      </div>
+    </footer>
+  );
+}
+
 function Navigation() {
   const linkClass = ({ isActive }) =>
     `rounded-md px-3 py-2 text-sm font-medium ${
@@ -1570,7 +1998,7 @@ function Navigation() {
 
 function App() {
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
+    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
           <div className="space-y-0.5">
@@ -1584,14 +2012,24 @@ function App() {
           <Navigation />
         </div>
       </header>
-      <Routes>
-        <Route path="/" element={<RootWithToken />} />
-        <Route path="/members" element={<MembersPage />} />
-        <Route path="/events" element={<EventsPage />} />
-        <Route path="/events/:eventId/outreach" element={<OutreachLauncherPage />} />
-        <Route path="/respond" element={<RespondPage />} />
-        <Route path="/reports" element={<ReportsPage />} />
-      </Routes>
+      {!ORGANIZATION_ID ? (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm text-amber-900">
+          Set <code className="rounded bg-amber-100 px-1">VITE_ORGANIZATION_ID</code> when
+          building the app (see <code className="rounded bg-amber-100 px-1">frontend/.env.example</code>
+          ).
+        </div>
+      ) : null}
+      <div className="flex flex-1 flex-col">
+        <Routes>
+          <Route path="/" element={<RootWithToken />} />
+          <Route path="/members" element={<MembersPage />} />
+          <Route path="/events" element={<EventsPage />} />
+          <Route path="/events/:eventId/outreach" element={<OutreachLauncherPage />} />
+          <Route path="/respond" element={<RespondPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
+        </Routes>
+      </div>
+      <SiteFooter />
     </div>
   );
 }
