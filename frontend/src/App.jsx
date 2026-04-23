@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
   NavLink,
@@ -1738,6 +1738,8 @@ function RespondPage({ token: tokenProp }) {
   const [started, setStarted] = useState(false);
   const [voiceError, setVoiceError] = useState("");
   const [transcript, setTranscript] = useState("");
+  const [callStartedAt, setCallStartedAt] = useState(null);
+  const transcriptRef = useRef("");
 
   useEffect(() => {
     async function resolveToken() {
@@ -1804,6 +1806,7 @@ function RespondPage({ token: tokenProp }) {
       const text = t.trim();
       if (!text) return;
       setTranscript((cur) => (cur ? `${cur}\n${text}` : text));
+      transcriptRef.current = transcriptRef.current ? `${transcriptRef.current}\n${text}` : text;
     });
 
     const unsubscribeMessage = webchat.on("message", (m) => {
@@ -1813,6 +1816,10 @@ function RespondPage({ token: tokenProp }) {
         typeof m?.payload?.text === "string" ? m.payload.text.trim() : null;
       if (!msgText) return;
       setTranscript((cur) => (cur ? `${cur}\n${who}: ${msgText}` : `${who}: ${msgText}`));
+      const formatted = transcriptRef.current
+        ? `${transcriptRef.current}\n${who}: ${msgText}`
+        : `${who}: ${msgText}`;
+      transcriptRef.current = formatted;
     });
 
     return () => {
@@ -1820,6 +1827,47 @@ function RespondPage({ token: tokenProp }) {
       unsubscribeMessage();
     };
   }, [webchat]);
+
+  useEffect(() => {
+    const unsubscribeClosed = webchat.on("closed", () => {
+      saveVoiceResponse("closed-event");
+    });
+    return () => unsubscribeClosed();
+  }, [webchat]);
+
+  const saveVoiceResponse = useCallback(async (trigger) => {
+    const finalTranscript = transcriptRef.current?.trim();
+    if (!finalTranscript) {
+      console.log("[respond] No transcript to save, skipping");
+      return;
+    }
+    if (!token) {
+      console.warn("[respond] Missing token, cannot save response");
+      return;
+    }
+    const endedAt = new Date().toISOString();
+    const startedAt = callStartedAt ? callStartedAt.toISOString() : null;
+    const callLengthSeconds = callStartedAt
+      ? Math.max(0, Math.round((Date.now() - callStartedAt.getTime()) / 1000))
+      : null;
+
+    try {
+      console.log("[respond] Saving voice response", {
+        trigger,
+        transcriptLength: finalTranscript.length,
+      });
+      await postJson(`${API_BASE_URL}/api/voice/save-response`, {
+        token,
+        transcript: finalTranscript,
+        started_at: startedAt,
+        ended_at: endedAt,
+        call_length_seconds: callLengthSeconds,
+      });
+      console.log("[respond] Voice response saved");
+    } catch (err) {
+      console.error("[respond] Failed to save voice response", err);
+    }
+  }, [token, callStartedAt]);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -1853,6 +1901,8 @@ function RespondPage({ token: tokenProp }) {
                     );
                     return;
                   }
+                  transcriptRef.current = "";
+                  setCallStartedAt(new Date());
                   await startWebchat();
                   setStarted(true);
                 } catch (e) {
@@ -1890,7 +1940,8 @@ function RespondPage({ token: tokenProp }) {
               </p>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
+                  await saveVoiceResponse("stop-button");
                   stopWebchat();
                   setStarted(false);
                 }}
