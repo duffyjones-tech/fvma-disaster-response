@@ -1157,6 +1157,165 @@ app.post("/api/voice/start-web-call", async (req, res) => {
   });
 });
 
+
+// =============================================================================
+// POST /api/voice/save-response
+// Called by the frontend when a voice call ends to persist the transcript.
+// Writes to voice_calls and event_member_responses.
+// =============================================================================
+app.post("/api/voice/save-response", async (req, res) => {
+  const outreachToken = toNullableText(req.body?.token);
+  const transcript = toNullableText(req.body?.transcript);
+  const startedAtRaw = toNullableText(req.body?.started_at);
+  const endedAtRaw = toNullableText(req.body?.ended_at);
+  const callLengthSecondsRaw = req.body?.call_length_seconds;
+  const clientCallRef = toNullableText(req.body?.call_ref);
+
+  if (!outreachToken) {
+    res.status(400).json({ error: "token is required." });
+    return;
+  }
+  if (!transcript) {
+    res.status(400).json({ error: "transcript is required." });
+    return;
+  }
+
+  const notesValue = `outreach_token:${outreachToken}`;
+  const { data: outreach, error: outreachError } = await supabase
+    .from("outreach_contacts")
+    .select("id,contact_name,email,phone,event_id,organization_id")
+    .eq("notes", notesValue)
+    .maybeSingle();
+
+  if (outreachError) {
+    console.error("[voice-save-response] Failed to resolve outreach token", {
+      error: outreachError.message,
+      tokenPrefix: outreachToken.slice(0, 8),
+    });
+    res.status(500).json({
+      error: "Failed to resolve outreach token.",
+      details: outreachError.message,
+    });
+    return;
+  }
+  if (!outreach) {
+    res.status(404).json({ error: "Invalid or expired outreach token." });
+    return;
+  }
+
+  let memberId = null;
+  if (outreach.email) {
+    const { data: member, error: memberError } = await supabase
+      .from("members")
+      .select("id")
+      .eq("email", outreach.email)
+      .eq("organization_id", outreach.organization_id)
+      .maybeSingle();
+
+    if (memberError) {
+      console.warn("[voice-save-response] Member lookup failed (non-fatal)", {
+        email: outreach.email,
+        error: memberError.message,
+      });
+    } else if (member) {
+      memberId = member.id;
+    }
+  }
+
+  const startedAt = startedAtRaw ? new Date(startedAtRaw).toISOString() : null;
+  const endedAt = endedAtRaw ? new Date(endedAtRaw).toISOString() : new Date().toISOString();
+  const callLengthMinutes =
+    typeof callLengthSecondsRaw === "number" && callLengthSecondsRaw >= 0
+      ? callLengthSecondsRaw / 60
+      : null;
+
+  const callId = clientCallRef || `client-${outreach.id}-${Date.now()}`;
+
+  const { data: voiceCallRow, error: voiceCallError } = await supabase
+    .from("voice_calls")
+    .insert({
+      call_id: callId,
+      outreach_contact_id: outreach.id,
+      event_id: outreach.event_id,
+      organization_id: outreach.organization_id,
+      member_id: memberId,
+      agent_id: BLAND_WEB_AGENT_ID || null,
+      status: "completed",
+      concatenated_transcript: transcript,
+      call_length_minutes: callLengthMinutes,
+      started_at: startedAt,
+      ended_at: endedAt,
+      completed: true,
+    })
+    .select()
+    .single();
+
+  if (voiceCallError) {
+    console.error("[voice-save-response] Failed to insert voice_calls row", {
+      error: voiceCallError.message,
+      callId,
+    });
+    res.status(500).json({
+      error: "Failed to save voice call record.",
+      details: voiceCallError.message,
+    });
+    return;
+  }
+
+  let responseRow = null;
+  if (memberId) {
+    const answersPayload = {
+      transcript,
+      source: "client-capture",
+      voice_call_id: voiceCallRow.id,
+      captured_at: endedAt,
+    };
+
+    const { data: upsertedResponse, error: responseError } = await supabase
+      .from("event_member_responses")
+      .upsert(
+        {
+          event_id: outreach.event_id,
+          member_id: memberId,
+          organization_id: outreach.organization_id,
+          status: "responded",
+          channel: "voice",
+          answers: answersPayload,
+          responded_at: endedAt,
+        },
+        { onConflict: "event_id,member_id" }
+      )
+      .select()
+      .single();
+
+    if (responseError) {
+      console.warn("[voice-save-response] event_member_responses upsert failed (non-fatal)", {
+        error: responseError.message,
+        eventId: outreach.event_id,
+        memberId,
+      });
+    } else {
+      responseRow = upsertedResponse;
+    }
+  }
+
+  console.log("[voice-save-response] Saved voice response", {
+    callId,
+    outreachContactId: outreach.id,
+    memberIdFound: Boolean(memberId),
+    eventMemberResponseCreated: Boolean(responseRow),
+    transcriptLength: transcript.length,
+  });
+
+  res.status(201).json({
+    message: "Voice response saved.",
+    call_id: callId,
+    voice_call_id: voiceCallRow.id,
+    event_member_response_id: responseRow?.id || null,
+    member_id: memberId,
+  });
+});
+
 app.get("/api/members", async (req, res) => {
   const organizationId = toNullableText(req.query.organization_id);
 
