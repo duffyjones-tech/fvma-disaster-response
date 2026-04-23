@@ -1626,7 +1626,7 @@ app.post("/api/voice/save-response", async (req, res) => {
           event_id: outreach.event_id,
           member_id: memberId,
           organization_id: outreach.organization_id,
-          status: "responded",
+          status: "pending_review",
           channel: "voice",
           answers: answersPayload,
           responded_at: endedAt,
