@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import sendgridMail from "@sendgrid/mail";
+import twilio from "twilio";
 import { supabase } from "./supabaseClient.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -28,6 +29,13 @@ if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
 
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
 const SENDGRID_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "";
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
+const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || "";
+const twilioClient =
+  TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN
+    ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    : null;
 const OUTREACH_LINK_BASE_URL = process.env.OUTREACH_LINK_BASE_URL || "";
 const DEFAULT_ORGANIZATION_ID = process.env.DEFAULT_ORGANIZATION_ID || "";
 const BLAND_API_KEY = process.env.BLAND_API_KEY || "";
@@ -778,6 +786,7 @@ app.post("/api/events/:id/outreach-launch", async (req, res) => {
   const outreachRows = [];
   const skipped = [];
   const pendingEmailSends = [];
+  const pendingSmsSends = [];
   let emailChannelRowCount = 0;
   let smsChannelRowCount = 0;
 
@@ -826,6 +835,12 @@ app.post("/api/events/:id/outreach-launch", async (req, res) => {
         });
       } else if (channel === "sms") {
         smsChannelRowCount += 1;
+        pendingSmsSends.push({
+          to: member.phone,
+          contact_name: member.full_name,
+          token: outreachToken,
+          outreach_link: outreachLink,
+        });
       }
     });
   });
@@ -973,10 +988,84 @@ app.post("/api/events/:id/outreach-launch", async (req, res) => {
     );
   }
 
+  let smsSendAttempted = false;
+  let smsSendSucceeded = 0;
+  let smsSendFailed = 0;
+  const smsSendErrors = [];
+
+  if (
+    normalizedChannels.includes("sms") &&
+    twilioClient &&
+    TWILIO_FROM_NUMBER &&
+    pendingSmsSends.length
+  ) {
+    console.log(
+      "[outreach-launch] Twilio SMS sending block entered",
+      JSON.stringify({
+        eventId,
+        organizationId,
+        wantsSms: normalizedChannels.includes("sms"),
+        pendingSmsSends: pendingSmsSends.length,
+        smsChannelRowCount,
+        TWILIO_ACCOUNT_SID_present: Boolean(TWILIO_ACCOUNT_SID),
+        TWILIO_FROM_NUMBER_present: Boolean(TWILIO_FROM_NUMBER),
+      }),
+    );
+    smsSendAttempted = true;
+
+    for (const entry of pendingSmsSends) {
+      try {
+        const messageBody = entry.outreach_link
+          ? `FVMA Disaster Response: Hi ${entry.contact_name}, the FVMA is checking on your practice after ${event.name}. Please share your status: ${entry.outreach_link} Reply STOP to opt out.`
+          : `FVMA Disaster Response: Hi ${entry.contact_name}, the FVMA is checking on your practice. Outreach link is not configured yet. Reply STOP to opt out.`;
+
+        console.log(
+          "[outreach-launch] Twilio sending to",
+          JSON.stringify({ to: entry.to }),
+        );
+        // eslint-disable-next-line no-await-in-loop
+        const message = await twilioClient.messages.create({
+          body: messageBody,
+          from: TWILIO_FROM_NUMBER,
+          to: entry.to,
+        });
+        console.log(
+          "[outreach-launch] Twilio send success",
+          JSON.stringify({ to: entry.to, sid: message.sid, status: message.status }),
+        );
+        smsSendSucceeded += 1;
+      } catch (err) {
+        console.log(
+          "[outreach-launch] Twilio send error",
+          JSON.stringify({
+            to: entry.to,
+            errorMessage: err?.message,
+            code: err?.code,
+            moreInfo: err?.moreInfo,
+          }),
+        );
+        smsSendFailed += 1;
+        smsSendErrors.push(err?.message || "Twilio send failed.");
+      }
+    }
+  } else {
+    console.log(
+      "[outreach-launch] SMS sending not attempted",
+      JSON.stringify({
+        wantsSms: normalizedChannels.includes("sms"),
+        TWILIO_ACCOUNT_SID_present: Boolean(TWILIO_ACCOUNT_SID),
+        TWILIO_FROM_NUMBER_present: Boolean(TWILIO_FROM_NUMBER),
+        twilioClient_present: Boolean(twilioClient),
+        pendingSmsSends_length: pendingSmsSends.length,
+        smsChannelRowCount,
+      }),
+    );
+  }
+
   res.status(201).json({
     message:
-      emailSendAttempted
-        ? "Outreach launched. Contact records created and email sending attempted."
+      emailSendAttempted || smsSendAttempted
+        ? "Outreach launched. Contact records created and channel sending attempted."
         : "Outreach launched. Contact records created successfully.",
     event_id: eventId,
     channels: normalizedChannels,
@@ -989,6 +1078,12 @@ app.post("/api/events/:id/outreach-launch", async (req, res) => {
       succeeded: emailSendSucceeded,
       failed: emailSendFailed,
       errors: emailSendErrors.slice(0, 5),
+    },
+    sms: {
+      attempted: smsSendAttempted,
+      succeeded: smsSendSucceeded,
+      failed: smsSendFailed,
+      errors: smsSendErrors.slice(0, 5),
     },
   });
 });
