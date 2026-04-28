@@ -1801,14 +1801,6 @@ function RespondPage({ token: tokenProp }) {
   });
 
   useEffect(() => {
-    const unsubscribeText = webchat.on("text", (t) => {
-      if (typeof t !== "string") return;
-      const text = t.trim();
-      if (!text) return;
-      setTranscript((cur) => (cur ? `${cur}\n${text}` : text));
-      transcriptRef.current = transcriptRef.current ? `${transcriptRef.current}\n${text}` : text;
-    });
-
     const unsubscribeMessage = webchat.on("message", (m) => {
       const who =
         m?.payload?.type === "assistant" ? "AI" : m?.payload?.type ? "You" : "Message";
@@ -1823,7 +1815,6 @@ function RespondPage({ token: tokenProp }) {
     });
 
     return () => {
-      unsubscribeText();
       unsubscribeMessage();
     };
   }, [webchat]);
