@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import sendgridMail from "@sendgrid/mail";
 import twilio from "twilio";
+import Anthropic from "@anthropic-ai/sdk";
 import { supabase } from "./supabaseClient.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,6 +37,10 @@ const twilioClient =
   TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN
     ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
     : null;
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const anthropicClient = ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: ANTHROPIC_API_KEY })
+  : null;
 const OUTREACH_LINK_BASE_URL = process.env.OUTREACH_LINK_BASE_URL || "";
 const DEFAULT_ORGANIZATION_ID = process.env.DEFAULT_ORGANIZATION_ID || "";
 const BLAND_API_KEY = process.env.BLAND_API_KEY || "";
@@ -1464,6 +1469,66 @@ async function blandApiRequest(pathname, options = {}) {
   }
 }
 
+async function generateCallSummary(transcript) {
+  if (!anthropicClient) {
+    console.log("[generateCallSummary] anthropicClient not configured, skipping");
+    return null;
+  }
+  if (!transcript || transcript.trim().length === 0) {
+    console.log("[generateCallSummary] empty transcript, skipping");
+    return null;
+  }
+
+  const prompt = `Below is a transcript of a phone call between an FVMA (Florida Veterinary Medical Association) disaster response agent named Jordan and a veterinary practice member. The call is checking on the practice after a disaster.
+
+Summarize the call using EXACTLY this format. Use one line per field. If a field is not discussed in the call, write "Not mentioned" for that field.
+
+SAFETY: [Are the staff/owner safe? yes/no/partial with brief detail]
+PRACTICE STATUS: [Is the practice open/operational? open/closed/limited with brief detail]
+LOCATION: [Practice address or general location if mentioned]
+VETERINARIANS: [Number of vets at practice if mentioned]
+KEY CHALLENGES: [Main issues — power, flooding, damage, supplies, etc.]
+AID NEEDED: [Specific help requested, or "None"]
+BEST CONTACT: [Phone or contact method if discussed]
+RECOMMENDED FOLLOW-UP: [What FVMA should do next, e.g., "Schedule check-in in 48 hours" or "None — practice is OK"]
+
+Transcript:
+${transcript}
+
+Output only the structured summary, no preamble or explanation.`;
+
+  try {
+    console.log("[generateCallSummary] calling Claude API", JSON.stringify({
+      transcript_length: transcript.length,
+    }));
+    const response = await anthropicClient.messages.create({
+      model: "claude-sonnet-4-5",
+      max_tokens: 500,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const summaryText = response.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
+
+    console.log("[generateCallSummary] success", JSON.stringify({
+      summary_length: summaryText.length,
+      input_tokens: response.usage?.input_tokens,
+      output_tokens: response.usage?.output_tokens,
+    }));
+
+    return summaryText;
+  } catch (err) {
+    console.log("[generateCallSummary] error", JSON.stringify({
+      errorMessage: err?.message,
+      errorType: err?.constructor?.name,
+    }));
+    return null;
+  }
+}
+
 app.post("/api/voice/start-web-call", async (req, res) => {
   const outreachToken = toNullableText(req.body?.token);
   const requestedAgentId = toNullableText(req.body?.agent_id);
@@ -1705,10 +1770,38 @@ app.post("/api/voice/save-response", async (req, res) => {
     return;
   }
 
+  let generatedSummary = null;
+  try {
+    generatedSummary = await generateCallSummary(transcript);
+
+    if (generatedSummary && voiceCallRow?.id) {
+      const { error: summaryUpdateError } = await supabase
+        .from("voice_calls")
+        .update({ summary: generatedSummary })
+        .eq("id", voiceCallRow.id);
+
+      if (summaryUpdateError) {
+        console.log("[voice/save-response] failed to save summary to voice_calls", JSON.stringify({
+          voiceCallId: voiceCallRow.id,
+          error: summaryUpdateError.message,
+        }));
+      } else {
+        console.log("[voice/save-response] summary saved to voice_calls", JSON.stringify({
+          voiceCallId: voiceCallRow.id,
+        }));
+      }
+    }
+  } catch (summaryErr) {
+    console.log("[voice/save-response] summary generation threw", JSON.stringify({
+      errorMessage: summaryErr?.message,
+    }));
+  }
+
   let responseRow = null;
   if (memberId) {
     const answersPayload = {
       transcript,
+      summary: generatedSummary,
       source: "client-capture",
       voice_call_id: voiceCallRow.id,
       captured_at: endedAt,
