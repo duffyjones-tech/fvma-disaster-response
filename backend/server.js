@@ -569,6 +569,14 @@ app.get("/api/events/:id/member-report", async (req, res) => {
       channel_contacted: channelContacted,
       date_responded: record?.responded_at || null,
       answers: sanitizeSurveyAnswers(record?.answers || {}),
+      voice:
+        record?.channel === "voice" && record?.answers
+          ? {
+              summary: record.answers.summary || null,
+              transcript: record.answers.transcript || null,
+              source: record.answers.source || null,
+            }
+          : null,
     };
   });
 

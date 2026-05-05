@@ -1658,23 +1658,23 @@ function ReportsPage() {
                           <tr>
                             <td colSpan={5} className="border-t border-slate-200 bg-slate-50 px-6 py-4">
                               <div className="space-y-3">
-                                {row.answers?.summary ? (
+                                {row.voice?.summary ? (
                                   <div>
                                     <h4 className="mb-2 text-sm font-semibold text-slate-700">Summary</h4>
                                     <pre className="whitespace-pre-wrap rounded border border-slate-200 bg-white p-3 font-sans text-sm text-slate-800">
-                                      {row.answers.summary}
+                                      {row.voice.summary}
                                     </pre>
                                   </div>
                                 ) : null}
-                                {row.answers?.transcript ? (
+                                {row.voice?.transcript ? (
                                   <div>
                                     <h4 className="mb-2 text-sm font-semibold text-slate-700">Full Transcript</h4>
                                     <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-3 font-sans text-sm text-slate-700">
-                                      {row.answers.transcript}
+                                      {row.voice.transcript}
                                     </pre>
                                   </div>
                                 ) : null}
-                                {!row.answers?.summary && !row.answers?.transcript ? (
+                                {!row.voice?.summary && !row.voice?.transcript ? (
                                   <p className="text-sm italic text-slate-500">
                                     No voice details captured for this response.
                                   </p>
