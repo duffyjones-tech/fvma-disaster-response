@@ -46,6 +46,9 @@ function statusLabel(status) {
   if (status === "needs_help") {
     return "Needs Help";
   }
+  if (status === "pending_review") {
+    return "Voice Captured";
+  }
   return "No Response";
 }
 
@@ -1394,7 +1397,7 @@ function ReportsPage() {
   const [events, setEvents] = useState([]);
   const [reportPayload, setReportPayload] = useState(null);
   const [statusFilter, setStatusFilter] = useState("all");
-  const [expanded, setExpanded] = useState(() => new Set());
+  const [expandedRowId, setExpandedRowId] = useState(null);
   const [isLoadingEvents, setIsLoadingEvents] = useState(true);
   const [isLoadingReport, setIsLoadingReport] = useState(false);
   const [error, setError] = useState("");
@@ -1468,20 +1471,11 @@ function ReportsPage() {
     if (statusFilter === "all") {
       return rows;
     }
+    if (statusFilter === "no_response") {
+      return rows.filter((r) => !r.status);
+    }
     return rows.filter((r) => r.status === statusFilter);
   }, [reportPayload, statusFilter]);
-
-  const toggleExpanded = useCallback((memberId) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(memberId)) {
-        next.delete(memberId);
-      } else {
-        next.add(memberId);
-      }
-      return next;
-    });
-  }, []);
 
   const exportCsv = useCallback(() => {
     const csv = buildReportCsv(filteredRows);
@@ -1566,6 +1560,7 @@ function ReportsPage() {
               {filterBtn("all", "All")}
               {filterBtn("safe", "Safe")}
               {filterBtn("needs_help", "Needs Help")}
+              {filterBtn("pending_review", "Voice Captured")}
               {filterBtn("no_response", "No Response")}
               <button
                 type="button"
@@ -1611,36 +1606,37 @@ function ReportsPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {filteredRows.map((row) => {
-                    const isOpen = expanded.has(row.member.id);
+                    const rowId =
+                      row.id ??
+                      row.member?.id ??
+                      row.member_id ??
+                      row.member?.full_name;
+                    const isOpen = expandedRowId === rowId;
                     const status = row.status;
                     const statusClass =
                       status === "safe"
                         ? "bg-emerald-100 text-emerald-800"
                         : status === "needs_help"
                           ? "bg-rose-100 text-rose-800"
+                          : status === "pending_review"
+                            ? "bg-sky-100 text-sky-800"
                           : "bg-amber-100 text-amber-800";
                     return (
-                      <Fragment key={row.member.id}>
-                        <tr className="hover:bg-slate-50">
+                      <Fragment key={rowId}>
+                        <tr
+                          onClick={() => setExpandedRowId(isOpen ? null : rowId)}
+                          className="cursor-pointer hover:bg-slate-50"
+                        >
                           <td className="px-4 py-3 align-top">
-                            <button
-                              type="button"
-                              onClick={() => toggleExpanded(row.member.id)}
-                              className="rounded p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-800"
-                              aria-expanded={isOpen}
-                              aria-label={isOpen ? "Collapse answers" : "Expand answers"}
+                            <span
+                              className="inline-flex rounded p-1 text-slate-500"
+                              aria-hidden="true"
                             >
                               {isOpen ? "▼" : "▶"}
-                            </button>
+                            </span>
                           </td>
                           <td className="px-6 py-3 font-medium text-slate-900">
-                            <button
-                              type="button"
-                              onClick={() => toggleExpanded(row.member.id)}
-                              className="text-left hover:underline"
-                            >
-                              {row.member.full_name}
-                            </button>
+                            {row.member.full_name}
                           </td>
                           <td className="px-6 py-3">
                             <span
@@ -1659,32 +1655,30 @@ function ReportsPage() {
                           </td>
                         </tr>
                         {isOpen ? (
-                          <tr className="bg-slate-50">
-                            <td colSpan={5} className="px-6 pb-5 pt-0">
-                              <div className="rounded-lg border border-slate-200 bg-white p-4">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                  Check-in answers
-                                </p>
-                                <dl className="mt-3 space-y-3">
-                                  {REPORT_QUESTION_LABELS.map((label, i) => {
-                                    const key = `q${i + 1}`;
-                                    const val = row.answers?.[key];
-                                    const display =
-                                      val !== undefined && val !== null && String(val).trim() !== ""
-                                        ? String(val)
-                                        : "—";
-                                    return (
-                                      <div key={key}>
-                                        <dt className="text-sm font-medium text-slate-800">
-                                          {i + 1}. {label}
-                                        </dt>
-                                        <dd className="mt-0.5 text-sm text-slate-600 whitespace-pre-wrap">
-                                          {display}
-                                        </dd>
-                                      </div>
-                                    );
-                                  })}
-                                </dl>
+                          <tr>
+                            <td colSpan={5} className="border-t border-slate-200 bg-slate-50 px-6 py-4">
+                              <div className="space-y-3">
+                                {row.answers?.summary ? (
+                                  <div>
+                                    <h4 className="mb-2 text-sm font-semibold text-slate-700">Summary</h4>
+                                    <pre className="whitespace-pre-wrap rounded border border-slate-200 bg-white p-3 font-sans text-sm text-slate-800">
+                                      {row.answers.summary}
+                                    </pre>
+                                  </div>
+                                ) : null}
+                                {row.answers?.transcript ? (
+                                  <div>
+                                    <h4 className="mb-2 text-sm font-semibold text-slate-700">Full Transcript</h4>
+                                    <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-3 font-sans text-sm text-slate-700">
+                                      {row.answers.transcript}
+                                    </pre>
+                                  </div>
+                                ) : null}
+                                {!row.answers?.summary && !row.answers?.transcript ? (
+                                  <p className="text-sm italic text-slate-500">
+                                    No voice details captured for this response.
+                                  </p>
+                                ) : null}
                               </div>
                             </td>
                           </tr>
